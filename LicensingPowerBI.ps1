@@ -55,4 +55,6 @@ $UserLicenseDetail = ForEach ($ADUser in $ADUsers)
     }
 
 $ProUsers = $UserLicenseDetail
-$ProUsers | Select-Object -Property "User Name", UserPrincipalName, Department, Appliesto, ProvisioningStatus, ServicePlanName | export-csv -Path .\Data.csv -NoTypeInformation
+$ProUsers | Select-Object -Property "User Name", UserPrincipalName, Department, Appliesto, ProvisioningStatus, ServicePlanName | export-csv -Path c:\Data.csv -NoTypeInformation
+
+Get-MsolAccountSku | export-csv -path c:\Data2.csv -NoTypeInformation
