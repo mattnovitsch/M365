@@ -1,0 +1,3 @@
+//check whether the Device installation policy has been deployed to the target machine, event only when modification happens
+DeviceRegistryEvents
+| whereRegistryKey contains"HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\"| orderbyTimestamp desc

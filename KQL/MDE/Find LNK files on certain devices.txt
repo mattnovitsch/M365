@@ -1,0 +1,5 @@
+//Find LNK files on certain devices
+DeviceFileEvents
+| where DeviceName  == "mcnsurfacelaptop2"
+| where FileName contains ".LNK" 
+| project Timestamp, DeviceName, ActionType, FileName, FolderPath, PreviousFileName, PreviousFolderPath, InitiatingProcessAccountName, InitiatingProcessFolderPath

@@ -1,0 +1,7 @@
+//Find accounts that have been deleted and by whom
+IdentityDirectoryEvents
+| where ActionType == "Account deleted"
+| extend parsed=parse_json(AdditionalFields)
+| extend ACTOR_ENTITY_USER = iff( isnull(AdditionalFields.["ACTOR.ENTITY_USER"]), AdditionalFields.["ACTOR.ENTITY_USER"], AdditionalFields.["ACTOR.ENTITY_USER"])
+| extend ACTOR_ENTITY_USER = iff( isnull(ACTOR_ENTITY_USER), AdditionalFields.["ACTOR.ENTITY_USER"], ACTOR_ENTITY_USER)
+| project Timestamp, ActionType, TargetAccountUpn, AccountName, ACTOR_ENTITY_USER, AdditionalFields

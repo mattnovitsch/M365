@@ -1,0 +1,17 @@
+//Show usb mounted and files copied
+DeviceEvents
+| where ActionType contains "USB"
+| where Timestamp > ago(1d)
+| project USBMountTime = Timestamp, DeviceId, AdditionalFields
+| extend DriveLetter = tostring(todynamic(AdditionalFields).DriveLetter)
+| join (DeviceFileEvents
+| where Timestamp > ago(1d)
+| where ActionType == "FileCreated"
+| parse FolderPath with DriveLetter '\\' *
+| extend DriveLetter = tostring(DriveLetter))on DeviceId, DriveLetter
+| where (Timestamp - USBMountTime) between (0min .. 15min)
+| summarize DistinctFilesCopied = dcount(SHA1), Events=makeset(pack("AccountName", InitiatingProcessAccountName, "Timestamp", Timestamp, "ReportId", ReportId, "FileName", FileName, "AdditionalDriveProperties", AdditionalFields)) by DeviceName, bin(Timestamp, 15m)
+| where DistinctFilesCopied > 10
+| mv-expand Events
+| extend Timestamp = todatetime(Events.Timestamp), FileName = Events.FileName, AccountName = Events.AccountName, ReportId = tolong(Events.ReportId), AdditionalDriveProperties = Events.AdditionalDriveProperties
+
