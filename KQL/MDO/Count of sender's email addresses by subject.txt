@@ -1,0 +1,8 @@
+//Count of sender's email addresses by subject
+EmailEvents
+//Change the date for as far back as you want to go
+| where Timestamp > ago(10d)
+| summarize CountSenderFromAddress=count() by SenderFromAddress, Subject
+//Change the Count of how many times the email with the same subject has come in
+| where CountSenderFromAddress >= 10
+| project SenderFromAddress, CountSenderFromAddress, Subject
