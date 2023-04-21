@@ -1,0 +1,4 @@
+//Software Inventory by OS
+DeviceTvmSoftwareInventory 
+| where OSPlatform contains "iOS"
+| project DeviceName,SoftwareName, SoftwareVendor, SoftwareVersion

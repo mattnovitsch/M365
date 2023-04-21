@@ -1,0 +1,5 @@
+//Netowrk traffic going to DNS(Port 53)
+DeviceNetworkEvents
+| where RemotePort == "53"
+| where RemoteUrl <> ""
+| project Timestamp, DeviceName, RemotePort, RemoteUrl

@@ -1,0 +1,4 @@
+//Netowrk traffic going to port 80 and 443
+DeviceNetworkEvents 
+| where RemotePort == "80" or RemotePort == "443"
+| project Timestamp, DeviceName, RemotePort, RemoteIP, RemoteUrl
