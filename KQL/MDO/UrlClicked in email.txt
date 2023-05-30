@@ -1,0 +1,4 @@
+UrlClickEvents
+| where ActionType == "ClickAllowed"
+//| where ActionType <> "ClickAllowed"
+| project AccountUpn, ActionType, Url
