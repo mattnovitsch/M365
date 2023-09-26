@@ -9,4 +9,4 @@ DeviceNetworkEvents
 | where InitiatingProcessFileName == "msedge.exe" or InitiatingProcessFileName == "chrome.exe"
 //| where RemoteUrl contains "facebook"
 //| where InitiatingProcessAccountName contains "Matt"
-| project Timestamp,DeviceName, Action=ActionType1, URL_IPAddress=RemoteIP, URL=RemoteUrl, Username=InitiatingProcessAccountName, Browser=InitiatingProcessFileName 
+| distinct Timestamp,DeviceName, Action=ActionType1, URL_IPAddress=RemoteIP, URL=RemoteUrl, Username=InitiatingProcessAccountName, Browser=InitiatingProcessFileName 
