@@ -1,12 +1,14 @@
 DeviceNetworkEvents 
-| where RemotePort == 80 or RemotePort == 443
 | where RemoteUrl <> ""
-| where InitiatingProcessAccountName !contains "service" and InitiatingProcessAccountName <> "system" and InitiatingProcessAccountName  <> ""
+| extend TimeStampformated=format_datetime(Timestamp,'MM/dd/yyyy HH:mm tt')
 | join kind=leftouter (DeviceEvents
-| where ActionType == 'SmartScreenUrlWarning'
-| extend A=parse_json(AdditionalFields)
-) on DeviceName, RemoteUrl
+    | where ActionType == 'SmartScreenUrlWarning' or ActionType == 'ExploitGuardNetworkProtectionBlocked'
+    | extend A=parse_json(AdditionalFields)
+    | extend TimeStampformated=format_datetime(Timestamp,'MM/dd/yyyy HH:mm tt')
+    ) on DeviceName, RemoteUrl, InitiatingProcessFileName, InitiatingProcessAccountName, TimeStampformated
 | where InitiatingProcessFileName == "msedge.exe" or InitiatingProcessFileName == "chrome.exe"
 //| where RemoteUrl contains "facebook"
 //| where InitiatingProcessAccountName contains "Matt"
-| distinct Timestamp,DeviceName, Action=ActionType1, URL_IPAddress=RemoteIP, URL=RemoteUrl, Username=InitiatingProcessAccountName, Browser=InitiatingProcessFileName 
+//| where ActionType1 <> ""
+| distinct TimeStampformated,DeviceName, Action=ActionType1, URL_IPAddress=RemoteIP, URL=RemoteUrl, Username=InitiatingProcessAccountName, Browser=InitiatingProcessFileName
+| order by TimeStampformated desc  
