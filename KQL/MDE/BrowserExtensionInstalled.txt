@@ -1,0 +1,4 @@
+DeviceFileEvents 
+| where FileOriginReferrerUrl <> ""
+| where FileName contains ".crx"
+| project DeviceName, FileName, FolderPath, FileOriginReferrerUrl

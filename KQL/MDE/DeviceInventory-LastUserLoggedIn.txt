@@ -1,0 +1,11 @@
+DeviceLogonEvents
+| where LogonType == "Interactive"
+| where InitiatingProcessParentFileName == "wininit.exe"
+| join kind=inner (DeviceNetworkInfo
+    | where IPv4Dhcp <> ""
+    | mvexpand parse_json(IPAddresses)
+    | where IPAddresses.IPAddress !contains ":"
+    | project DeviceName, IPAddress=IPAddresses.IPAddress
+) on DeviceName
+| summarize max(Timestamp) by DeviceName, AccountName, tostring(IPAddress)
+| project DeviceName, AccountName, IPAddress
