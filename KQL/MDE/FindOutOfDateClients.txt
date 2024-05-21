@@ -1,0 +1,7 @@
+DeviceInfo
+| where OSPlatform contains "Windows"
+| summarize arg_max(Timestamp, *) by DeviceId
+| extend MajorClientVersion = todouble(substring(ClientVersion, 0, 7))
+| where MajorClientVersion < 10.8500
+| where OnboardingStatus == "Onboarded"
+| project-reorder ClientVersion
