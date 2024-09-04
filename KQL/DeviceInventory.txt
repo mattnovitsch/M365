@@ -1,0 +1,19 @@
+DeviceTvmInfoGathering
+| extend Fields=parse_json(AdditionalFields)
+| extend AvMode = tostring(Fields.AvMode)
+| extend AvEngineVersion = tostring(Fields.AvEngineVersion)
+| extend AvSignatureVersion = tostring(Fields.AvSignatureVersion)
+| extend AvPlatformVersion = tostring(Fields.AvPlatformVersion)
+| extend AvEngineUpdateTime = tostring(Fields.AvEngineUpdateTime)
+| extend AvSignatureUpdateTime = tostring(Fields.AvSignatureUpdateTime)
+| extend AvPlatformUpdateTime = tostring(Fields.AvPlatformUpdateTime)
+| extend AvSignatureRing = iif(tostring(Fields.AvSignatureRing) == '0', 'NotConfigured' , iif(tostring(Fields.AvSignatureRing) == '2', 'Beta Channel' ,iif(tostring(Fields.AvSignatureRing) == '3', 'Current Channel(Preview)',iif(tostring(Fields.AvSignatureRing) == '4', 'Current Channel (Staged)',iif(tostring(Fields.AvSignatureRing) == '5', 'Current Channel (Broad)' ,iif(tostring(Fields.AvSignatureRing) == '6', 'Critical','Unknown'))))))
+| extend AvPlatformRing = iif(tostring(Fields.AvPlatformRing) == '0', 'NotConfigured' , iif(tostring(Fields.AvPlatformRing) == '2', 'Beta Channel' ,iif(tostring(Fields.AvPlatformRing) == '3', 'Current Channel(Preview)',iif(tostring(Fields.AvPlatformRing) == '4', 'Current Channel (Staged)',iif(tostring(Fields.AvPlatformRing) == '5', 'Current Channel (Broad)' ,iif(tostring(Fields.AvPlatformRing) == '6', 'Critical','Unknown'))))))
+| extend AvEngineRing= iif(tostring(Fields.AvEngineRing) == '0', 'NotConfigured' , iif(tostring(Fields.AvEngineRing) == '2', 'Beta Channel' ,iif(tostring(Fields.AvEngineRing) == '3', 'Current Channel(Preview)',iif(tostring(Fields.AvEngineRing) == '4', 'Current Channel (Staged)',iif(tostring(Fields.AvEngineRing) == '5', 'Current Channel (Broad)' ,iif(tostring(Fields.AvEngineRing) == '6', 'Critical','Unknown'))))))
+| extend AvModeStatus = iif(tostring(Fields.AvMode) == '0', 'Active' , iif(tostring(Fields.AvMode) == '1', 'Passive' ,iif(tostring(Fields.AvMode) == '4', 'EDR Blocked',iif(tostring(Fields.AvMode) == '2', 'SxS Passive' ,'Unknown'))))
+| join kind=inner (DeviceInfo
+    | project DeviceName, DeviceId,LoggedOnUsers
+    ) on DeviceId
+| where AvMode in(0, 1, 2, 3, 4)
+//| summarize count(DeviceName) by AvModeStatus
+| distinct DeviceName,AvModeStatus, OSPlatform, AvEngineVersion, AvSignatureVersion, AvPlatformVersion, AvEngineUpdateTime, AvSignatureUpdateTime, AvPlatformUpdateTime, AvSignatureRing, AvPlatformRing, AvEngineRing
