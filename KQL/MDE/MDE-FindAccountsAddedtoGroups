@@ -1,0 +1,41 @@
+//Find newly created local account added to group
+DeviceEvents
+| where ActionType contains "UserAccountAddedToLocalGroup"
+| extend Fields=parse_json(AdditionalFields)
+| extend AddToGroup = tostring(Fields.GroupName)
+| extend GroupDomainName = tostring(Fields.GroupDomainName)
+| join kind=inner (DeviceEvents
+    | where ActionType contains "UserAccountCreated"
+    | where AccountName <> ""
+    | distinct AccountName, AccountSid
+    ) on AccountSid
+| extend InitiatedAction=strcat (InitiatingProcessAccountDomain, "\\", InitiatingProcessAccountName)
+| project Timestamp, DeviceName, ActionType, InitiatedAction,AccountAdded=AccountName1, AddToGroup, GroupDomainName
+
+//Find cloud or on-prem accounts added to group
+DeviceEvents
+| extend placeholder=1
+| where ActionType contains "UserAccountAddedToLocalGroup"
+| extend Fields=parse_json(AdditionalFields)
+| extend AddToGroup = tostring(Fields.GroupName)
+| extend GroupDomainName = tostring(Fields.GroupDomainName)
+| join kind=inner (IdentityInfo 
+    | extend placeholder=1
+    | distinct AccountName, OnPremSid, CloudSid, placeholder
+) on placeholder
+| where AccountSid == OnPremSid or AccountSid == CloudSid
+| extend InitiatedAction=strcat (InitiatingProcessAccountDomain, "\\", InitiatingProcessAccountName)
+| project Timestamp, DeviceName, ActionType, InitiatedAction,AccountAdded=AccountName1, AddToGroup, GroupDomainName
+
+//Find local account that was recently logged in with that had a group memebership change.
+DeviceEvents
+| where ActionType contains "UserAccountAddedToLocalGroup"
+| extend Fields=parse_json(AdditionalFields)
+| extend AddToGroup = tostring(Fields.GroupName)
+| extend GroupDomainName = tostring(Fields.GroupDomainName)
+| join kind=inner (DeviceLogonEvents
+    | where AccountName <> ""
+    | distinct AccountName, AccountSid
+    ) on AccountSid
+| extend InitiatedAction=strcat (InitiatingProcessAccountDomain, "\\", InitiatingProcessAccountName)
+| project Timestamp, DeviceName, ActionType, InitiatedAction,AccountAdded=AccountName1, AddToGroup, GroupDomainName
