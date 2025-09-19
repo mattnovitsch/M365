@@ -1,4 +1,4 @@
-//Find newly created local account added to group
+//Find newly created local account added to group 
 DeviceEvents
 | where ActionType contains "UserAccountAddedToLocalGroup"
 | extend Fields=parse_json(AdditionalFields)
