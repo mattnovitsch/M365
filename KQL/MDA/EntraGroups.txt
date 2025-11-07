@@ -1,0 +1,7 @@
+CloudAppEvents 
+| where ActionType contains 'add group'
+| project Timestamp, ActionType, AccountDisplayName, ObjectName, RawEventData
+
+CloudAppEvents 
+| where ActionType contains 'delete group'
+| project Timestamp, ActionType, AccountDisplayName, ObjectName, RawEventData

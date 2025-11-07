@@ -1,0 +1,17 @@
+CloudAppEvents
+| where Application contains 'Microsoft Azure'
+| where ActionType contains 'Write VirtualMachines'
+| extend Raw=parse_json(RawEventData)
+| extend eventName = tostring(Raw.eventName)
+| extend status = tostring(Raw.status)
+| extend Location = tostring(Raw.AccountMonikerLocation)
+| extend operationName = tostring(Raw.operationName)
+| parse operationName with * 'Microsoft.Compute/' VMType'/write'
+| where eventName == 'EndRequest'
+| where status == 'Succeeded'
+| mv-expand ActivityObjectExpand = ActivityObjects
+| extend ActivityObjectExpandExtend=parse_json(ActivityObjectExpand)
+| extend ServiceObjectType = tostring(ActivityObjectExpandExtend.ServiceObjectType)
+| extend ResourceGroup = tostring(ActivityObjectExpandExtend.Name)
+| where ServiceObjectType == 'Azure Resource Group'
+| project CreatedTime=Timestamp,ResourceGroup,Location, VMType, VMName=ObjectName, Createdby=AccountDisplayName 

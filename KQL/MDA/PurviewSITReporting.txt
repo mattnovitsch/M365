@@ -1,0 +1,110 @@
+let AppEvents = (CloudAppEvents
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != ""
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != "[]"
+| extend sit = parse_json(tostring(RawEventData.SensitiveInfoTypeData))
+| mv-expand sit
+| extend UserId = tolower(RawEventData.UserId)
+| extend SensitiveInfoTypeName = tostring(sit.SensitiveInfoTypeName)
+| extend document = tostring(RawEventData.ObjectId)
+);
+AppEvents
+| extend ObjectId = tostring(RawEventData.ObjectId)
+| extend DeviceName = tostring(RawEventData.DeviceName)
+| extend Application = tostring(RawEventData.Application)
+| summarize count = count() by document,Application,SensitiveInfoTypeName,ActionType,DeviceName
+
+//SIT files
+CloudAppEvents
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != ""
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != "[]"
+| extend sit = parse_json(tostring(RawEventData.SensitiveInfoTypeData))
+| mv-expand sit
+| extend UserId = tolower(RawEventData.UserId)
+| extend SensitiveInfoTypeName = tostring(sit.SensitiveInfoTypeName)
+| extend document = tostring(RawEventData.ObjectId)
+| project Timestamp, ActionType, Application, AccountDisplayName, IPAddress, CountryCode, City, SensitiveInfoTypeName, document
+
+//Files copied with SIT label without SIT Labels
+CloudAppEvents
+| where ActionType contains "FileCopiedToRemovableMedia"
+| extend RawEventDataObject = parse_json(RawEventData)
+| extend SourceFileName = RawEventDataObject.ObjectId
+| extend UserName = RawEventDataObject.UserId
+| extend DestinationFilePath = RawEventDataObject.TargetFilePath
+| project Timestamp, ActionType,SourceFileName,DestinationFilePath, UserName, City, CountryCode, IPAddress
+
+//Files copied with SIT label
+CloudAppEvents
+| where ActionType contains "FileCopiedToRemovableMedia"
+| extend RawEventDataObject = parse_json(RawEventData)
+| extend FileName = RawEventDataObject.ObjectId
+| extend UserName = RawEventDataObject.UserId
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != ""
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != "[]"
+| extend sit = parse_json(tostring(RawEventData.SensitiveInfoTypeData))
+| mv-expand sit
+| extend SensitiveInfoTypeName = tostring(sit.SensitiveInfoTypeName)
+| where SensitiveInfoTypeName != ""
+| project Timestamp, ActionType,FileName,SensitiveInfoTypeName, UserName, City, CountryCode, IPAddress
+
+//Files that were copied to Removable Media with SIT data
+let FileswithSITLabel=CloudAppEvents
+| where ActionType contains "FileCopiedToRemovableMedia"
+| extend RawEventDataObject = parse_json(RawEventData)
+| extend SourceFileName = RawEventDataObject.ObjectId
+| extend UserName = RawEventDataObject.UserId
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != ""
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != "[]"
+| extend sit = parse_json(tostring(RawEventData.SensitiveInfoTypeData))
+| mv-expand sit
+| extend SensitiveInfoTypeName = tostring(sit.SensitiveInfoTypeName)
+| project Timestamp, ActionType,SourceFileName,SensitiveInfoTypeName;
+CloudAppEvents
+| where ActionType contains "FileCopiedToRemovableMedia"
+| extend RawEventDataObject = parse_json(RawEventData)
+| extend SourceFileName = RawEventDataObject.ObjectId
+| extend SourceFileName = tostring(SourceFileName)
+| extend UserName = RawEventDataObject.UserId
+| extend DestinationFilePath = RawEventDataObject.TargetFilePath
+| where parse_json(tostring(RawEventData.RemovableMediaDeviceAttributes)) != ""
+| where parse_json(tostring(RawEventData.RemovableMediaDeviceAttributes)) != "[]"
+| extend RemovableMediaDeviceAttributes = parse_json(tostring(RawEventData.RemovableMediaDeviceAttributes))
+| extend RemovableMediaDeviceAttributes = parse_json(RemovableMediaDeviceAttributes)
+| extend MediaManufacturer = RemovableMediaDeviceAttributes.Manufacturer
+| extend MediaModel = RemovableMediaDeviceAttributes.Model
+| extend MediaSerialNumber = RemovableMediaDeviceAttributes.SerialNumber
+| join kind=leftouter (FileswithSITLabel
+    | extend SourceFileName = tostring(SourceFileName)
+    | project Timestamp, SourceFileName, SensitiveInfoTypeName
+) on Timestamp, SourceFileName
+| project Timestamp, ActionType,SourceFileName,DestinationFilePath,SensitiveInfoTypeName, MediaManufacturer, MediaModel, MediaSerialNumber,UserName, City, CountryCode, IPAddress
+
+//Files Printed
+let FileswithSITLabel=CloudAppEvents
+| where ActionType contains "FilePrinted"
+| extend RawEventDataObject = parse_json(RawEventData)
+| extend SourceFileName = RawEventDataObject.ObjectId
+| extend UserName = RawEventDataObject.UserId
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != ""
+| where parse_json(tostring(RawEventData.SensitiveInfoTypeData)) != "[]"
+| extend sit = parse_json(tostring(RawEventData.SensitiveInfoTypeData))
+| mv-expand sit
+| extend SensitiveInfoTypeName = tostring(sit.SensitiveInfoTypeName)
+| project Timestamp, ActionType,SourceFileName,SensitiveInfoTypeName;
+CloudAppEvents
+| where ActionType contains "FilePrinted"
+| extend RawEventDataObject = parse_json(RawEventData)
+| extend SourceFileName = RawEventDataObject.ObjectId
+| extend SourceFileName = tostring(SourceFileName)
+| where parse_json(tostring(RawEventData.PolicyMatchInfo)) != ""
+| where parse_json(tostring(RawEventData.PolicyMatchInfo)) != "[]"
+| extend PolicyMatchInfo = parse_json(tostring(RawEventData.PolicyMatchInfo))
+| extend PolicyMatchInfo = parse_json(PolicyMatchInfo)
+| extend PolicyName = PolicyMatchInfo.RuleName
+| extend UserName = RawEventDataObject.UserId
+| extend TargetPrinterName = RawEventData.TargetPrinterName
+| join kind=leftouter (FileswithSITLabel
+    | extend SourceFileName = tostring(SourceFileName)
+    | project Timestamp, SourceFileName, SensitiveInfoTypeName
+) on Timestamp, SourceFileName
+| project Timestamp, ActionType,SourceFileName,SensitiveInfoTypeName, PolicyName,TargetPrinterName,UserName, City, CountryCode, IPAddress

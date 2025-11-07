@@ -1,0 +1,6 @@
+CloudAppEvents 
+| where ActionType contains 'Consent'
+| extend parsed=parse_json(RawEventData)
+| extend ModifiedProperties = tostring(parsed.ModifiedProperties)
+| parse ModifiedProperties with * 'Scope: ' Scope ', CreatedDateTime:' Rest
+| project Timestamp, AccountDisplayName, Application, ActionType, RegistriedApplication=ObjectName, Scope,ModifiedProperties, RawEventData
