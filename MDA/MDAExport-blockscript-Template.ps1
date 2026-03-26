@@ -6,7 +6,7 @@
 $TenantId     = "<TenantID>" #Acquire from Entra Registered Application
 $ClientId     = "<ClientID>" #Acquire from Entra Registered Application
 $ClientSecret = "<Generate Client Secret>" #Generate Client Secret from Entra Registered Application
-$PolicyName   = "MDCA Block Script - Per Domain Rules"
+$PolicyName   = "MDCA Block Script - Per Domain Rules" #Default Policy name in Global Secure Access, feel free to change it
 
 # ===========================
 # CONFIG
