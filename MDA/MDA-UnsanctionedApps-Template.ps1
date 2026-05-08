@@ -5,7 +5,7 @@ $MDCATenant = "TenantName"
 $MDCARegion = "Regin"
 $MDCAToken  = "CloudAppsToken"
 
-$savePath = "MDCA-UnsanctionedAndProtectedDomains.csv"   # Path to save the block script
+$savePath = "MDCA-UnsanctionedDomains.csv"   # Path to save the block script
 $formatCode = 120   # Zscaler block script format
 $typeFilter = "banned"  # Unsanctioned apps
 
