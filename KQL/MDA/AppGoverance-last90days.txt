@@ -1,0 +1,3 @@
+OAuthAppInfo
+| where LastUsedTime <= ago(90d)
+| project AppName, LastUsedTime, AppStatus, PrivilegeLevel, Permissions, IsAdminConsented, ConsentedUsersCount
