@@ -1,9 +1,9 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Assesses Microsoft Defender for Cloud, Defender for Endpoint, Defender for Identity,
-    Defender for Office 365, Defender for Cloud Apps, and Microsoft Purview against
-    best-practice baselines and produces a colour-coded (Green / Yellow / Red)
+    Assesses Microsoft Entra ID, Defender for Cloud, Defender for Endpoint, Defender for
+    Identity, Defender for Office 365, Defender for Cloud Apps, and Microsoft Purview
+    against best-practice baselines and produces a colour-coded (Green / Yellow / Red)
     self-contained HTML report with a light/dark theme switch.
 
 .DESCRIPTION
@@ -48,6 +48,11 @@
     -DisableWAM, then -ExchangeCredential. The most common fix is simply running from a
     NON-ELEVATED PowerShell console as the signed-in Windows user.
 
+    ENTRA ROLE MATCHING: privileged roles are resolved by reading role definitions from
+    Graph and matching on displayName, rather than hardcoding role template GUIDs. Role
+    template IDs are stable but easy to transcribe wrongly, and a wrong GUID would
+    silently report "no admins" - which is far more dangerous than reporting Gray.
+
 .PARAMETER OutputFolder
     Folder for the HTML/CSV/JSON output. Defaults to the folder the script runs from.
     Created if it does not exist.
@@ -60,7 +65,7 @@
     Defaults to every enabled subscription visible to the signed-in account.
 
 .PARAMETER Modules
-    Which workloads to assess. Defaults to all six.
+    Which workloads to assess. Defaults to all seven.
 
 .PARAMETER MdaPortalUrl
     Your Defender for Cloud Apps portal URL, e.g. https://contoso.us3.portal.cloudappsecurity.com
@@ -100,16 +105,18 @@
 .EXAMPLE
     .\Invoke-DefenderBestPracticeReport.ps1
 
-    Runs all six workloads and writes the reports next to the script.
+    Runs all seven workloads and writes the reports next to the script.
+
+.EXAMPLE
+    .\Invoke-DefenderBestPracticeReport.ps1 -Modules Entra
+
+    Entra ID identity baseline only - no Azure or Exchange sign-in required.
 
 .EXAMPLE
     .\Invoke-DefenderBestPracticeReport.ps1 -Modules DefenderForOffice,Purview -DisableWam
 
 .EXAMPLE
     .\Invoke-DefenderBestPracticeReport.ps1 -Modules DefenderForEndpoint -DumpSettingIds
-
-.EXAMPLE
-    .\Invoke-DefenderBestPracticeReport.ps1 -InstallMissingModules -Cloud USGov
 
 .NOTES
     Required modules : Az.Accounts 2.12.0+, Microsoft.Graph.Authentication 2.0.0+,
@@ -120,6 +127,8 @@
                        Purview checks additionally need a compliance read role such as
                        Global Reader, Compliance Administrator, or the narrower
                        View-Only DLP Compliance Management / retention read roles.
+                       Entra PIM checks need Global Reader, Security Reader or
+                       Privileged Role Administrator.
                        Insider Risk Management and Communication Compliance checks
                        require E5 or the Compliance add-on plus their own role
                        assignments; where those cmdlets are absent the checks report
@@ -129,6 +138,9 @@
                        SecurityIdentitiesHealth.Read.All,
                        SecurityIdentitiesSensors.Read.All,
                        Policy.Read.All,
+                       Policy.Read.AuthenticationMethod,
+                       RoleManagement.Read.Directory,
+                       Directory.Read.All,
                        CloudApp-Discovery.Read.All
 
     PURVIEW SESSION NOTE: the unified audit log state is read from the Exchange Online
@@ -148,8 +160,8 @@ param(
 
     [string[]] $SubscriptionId,
 
-    [ValidateSet('DefenderForCloud', 'DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForOffice', 'DefenderForCloudApps', 'Purview')]
-    [string[]] $Modules = @('DefenderForCloud', 'DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForOffice', 'DefenderForCloudApps', 'Purview'),
+    [ValidateSet('Entra', 'DefenderForCloud', 'DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForOffice', 'DefenderForCloudApps', 'Purview')]
+    [string[]] $Modules = @('Entra', 'DefenderForCloud', 'DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForOffice', 'DefenderForCloudApps', 'Purview'),
 
     [string] $MdaPortalUrl,
 
@@ -270,8 +282,8 @@ $script:RequiredModules = @(
     @{
         Name           = 'Microsoft.Graph.Authentication'
         MinimumVersion = '2.0.0'
-        NeededBy       = @('DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForCloudApps')
-        Reason         = 'Microsoft Graph calls for Intune policies, MDI sensors, and Cloud Discovery.'
+        NeededBy       = @('Entra', 'DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForCloudApps')
+        Reason         = 'Microsoft Graph calls for Entra policies and roles, Intune policies, MDI sensors, and Cloud Discovery.'
     }
     @{
         Name           = 'ExchangeOnlineManagement'
@@ -820,7 +832,7 @@ function Connect-Workloads {
     param([string[]] $Requested)
 
     $needAz    = $Requested -contains 'DefenderForCloud'
-    $needGraph = @('DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForCloudApps') |
+    $needGraph = @('Entra', 'DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForCloudApps') |
                     Where-Object { $Requested -contains $_ }
 
     # Purview also needs Exchange Online: UnifiedAuditLogIngestionEnabled must be read
@@ -851,12 +863,17 @@ function Connect-Workloads {
             Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
             $context = Get-MgContext -ErrorAction SilentlyContinue
             if (-not $context -and -not $SkipConnect) {
+                # Entra checks add Policy.Read.AuthenticationMethod, RoleManagement.Read.Directory
+                # and Directory.Read.All on top of the Defender scopes.
                 $scopes = @(
                     'DeviceManagementConfiguration.Read.All'
                     'DeviceManagementManagedDevices.Read.All'
                     'SecurityIdentitiesHealth.Read.All'
                     'SecurityIdentitiesSensors.Read.All'
                     'Policy.Read.All'
+                    'Policy.Read.AuthenticationMethod'
+                    'RoleManagement.Read.Directory'
+                    'Directory.Read.All'
                     'CloudApp-Discovery.Read.All'
                 )
                 $params = @{ Scopes = $scopes; Environment = $script:Ep.GraphEnv; NoWelcome = $true }
@@ -951,7 +968,778 @@ function Get-MdeToken {
 #endregion
 
 # =====================================================================================
-# REGION: MODULE 1 - Microsoft Defender for Cloud
+# REGION: MODULE 1 - Microsoft Entra ID
+# =====================================================================================
+#region Entra
+
+<#
+    Privileged roles are matched by displayName against the role definitions Graph
+    returns, rather than by hardcoded role template GUID. Template IDs are stable but
+    trivially easy to transcribe wrongly, and a wrong GUID silently reports "no admins
+    hold this role" - a false Green, which is the worst possible failure mode for a
+    security baseline. Matching on name means an unmatched role simply does not appear,
+    and the roles that do match are provably real.
+#>
+$script:EntraPrivilegedRoles = @(
+    'Global Administrator'
+    'Privileged Role Administrator'
+    'Privileged Authentication Administrator'
+    'Security Administrator'
+    'Conditional Access Administrator'
+    'Application Administrator'
+    'Cloud Application Administrator'
+    'Exchange Administrator'
+    'SharePoint Administrator'
+    'User Administrator'
+    'Authentication Administrator'
+    'Helpdesk Administrator'
+    'Intune Administrator'
+    'Billing Administrator'
+)
+
+<#
+    Authentication methods, split by strength.
+
+    Phishing-resistant methods should be enabled. SMS and Voice are legitimate methods
+    but are phishable and interceptable, so they are graded Yellow when enabled rather
+    than Red - they are a weaker fallback, not a misconfiguration.
+#>
+$script:EntraStrongAuthMethods = @(
+    @{ Id = 'Fido2';                  Name = 'FIDO2 security keys' }
+    @{ Id = 'MicrosoftAuthenticator'; Name = 'Microsoft Authenticator' }
+    @{ Id = 'X509Certificate';        Name = 'Certificate-based authentication' }
+    @{ Id = 'TemporaryAccessPass';    Name = 'Temporary Access Pass' }
+)
+
+$script:EntraWeakAuthMethods = @(
+    @{ Id = 'Sms';   Name = 'SMS' }
+    @{ Id = 'Voice'; Name = 'Voice call' }
+    @{ Id = 'Email'; Name = 'Email OTP' }
+)
+
+function Invoke-EntraChecks {
+    $product = 'Microsoft Entra ID'
+    Write-Step -Message 'START Microsoft Entra ID assessment' -State 'Start'
+
+    if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
+        Add-ModuleFailure -Product $product -Reason 'No Microsoft Graph context available' `
+            -Recommendation 'Run Connect-MgGraph with Policy.Read.All, RoleManagement.Read.Directory and Directory.Read.All, then re-run.'
+        return
+    }
+
+    Test-EntraSecurityDefaults    -Product $product
+    Test-EntraConditionalAccess   -Product $product
+    Test-EntraAuthMethods         -Product $product
+    Test-EntraPrivilegedRoles     -Product $product
+    Test-EntraAuthorizationPolicy -Product $product
+
+    Write-Step -Message 'END Microsoft Entra ID assessment' -State 'Done'
+}
+
+function Test-EntraSecurityDefaults {
+    <#
+        Security defaults and Conditional Access are mutually exclusive. Which one is
+        "correct" depends on licensing, so this check grades the combination rather
+        than either setting in isolation:
+
+          CA policies enabled, security defaults off  -> Green (the mature posture)
+          Security defaults on, no CA                 -> Green (correct without P1)
+          Neither                                     -> Red   (tenant is unprotected)
+    #>
+    param([string] $Product)
+
+    $defaults = Invoke-Safely -Label 'security defaults policy' -Script {
+        Invoke-GraphGet -Uri '/v1.0/policies/identitySecurityDefaultsEnforcementPolicy'
+    }
+
+    if ($null -eq $defaults -or @($defaults).Count -eq 0) {
+        Add-Result -Product $Product -Category 'Baseline protection' -Setting 'Security defaults / Conditional Access baseline' `
+            -Status 'Gray' -Current 'Could not read identitySecurityDefaultsEnforcementPolicy' `
+            -Expected 'Conditional Access policies enabled, or security defaults on' `
+            -Recommendation 'Grant Policy.Read.All.'
+        return
+    }
+
+    $isEnabled = Get-PropertyValue @($defaults)[0] 'isEnabled'
+
+    $caPolicies = Invoke-Safely -Label 'Conditional Access policies (baseline)' -Script {
+        Invoke-GraphGet -Uri '/v1.0/identity/conditionalAccess/policies'
+    }
+
+    $caEnabled = 0
+    if ($null -ne $caPolicies) {
+        $caEnabled = @($caPolicies | Where-Object { $_.state -eq 'enabled' }).Count
+    }
+
+    if ($caEnabled -gt 0 -and $isEnabled -ne $true) {
+        $state   = 'Green'
+        $current = ('Conditional Access in use ({0} enabled policies); security defaults off' -f $caEnabled)
+        $rec     = 'No action required. Conditional Access supersedes security defaults.'
+    }
+    elseif ($isEnabled -eq $true -and $caEnabled -eq 0) {
+        $state   = 'Green'
+        $current = 'Security defaults enabled; no Conditional Access policies'
+        $rec     = 'Correct for tenants without Entra ID P1. If you hold P1, move to Conditional Access for granular control.'
+    }
+    elseif ($isEnabled -eq $true -and $caEnabled -gt 0) {
+        $state   = 'Yellow'
+        $current = ('Security defaults enabled AND {0} enabled CA policies' -f $caEnabled)
+        $rec     = 'These are mutually exclusive - CA policies do not take effect while security defaults are on. Disable security defaults.'
+    }
+    else {
+        $state   = 'Red'
+        $current = 'Security defaults off and no enabled Conditional Access policies'
+        $rec     = 'The tenant has no baseline identity protection. Enable security defaults, or build Conditional Access policies covering MFA and legacy auth.'
+    }
+
+    Add-Result -Product $Product -Category 'Baseline protection' -Setting 'Security defaults / Conditional Access baseline' `
+        -Status $state -Current $current `
+        -Expected 'Conditional Access policies enabled, or security defaults on' -Recommendation $rec
+}
+
+function Test-EntraConditionalAccess {
+    <#
+        Grades the Conditional Access estate against the policies every tenant should
+        have. Each pattern is detected structurally (grant controls, client app types,
+        risk levels) rather than by policy name, because names are arbitrary.
+    #>
+    param([string] $Product)
+
+    $policies = Invoke-Safely -Label 'Conditional Access policies' -Script {
+        Invoke-GraphGet -Uri '/v1.0/identity/conditionalAccess/policies'
+    }
+
+    if ($null -eq $policies) {
+        Add-Result -Product $Product -Category 'Conditional Access' -Setting 'Conditional Access policy inventory' `
+            -Status 'Gray' -Current 'Could not read Conditional Access policies' `
+            -Expected 'Core policies enabled' -Recommendation 'Grant Policy.Read.All.'
+        return
+    }
+
+    $total = @($policies).Count
+
+    if ($total -eq 0) {
+        Add-Result -Product $Product -Category 'Conditional Access' -Setting 'Conditional Access policy inventory' `
+            -Status 'Red' -Current 'No Conditional Access policies configured' `
+            -Expected 'Core policies enabled' `
+            -Recommendation 'Build the baseline set: MFA for admins, MFA for all users, block legacy authentication, and require compliant or hybrid-joined devices.'
+        return
+    }
+
+    Write-Step -Message ('Found {0} Conditional Access policies' -f $total) -State 'Info'
+
+    $enabled    = @($policies | Where-Object { $_.state -eq 'enabled' })
+    $reportOnly = @($policies | Where-Object { $_.state -eq 'enabledForReportingButNotEnforced' }).Count
+
+    Add-Result -Product $Product -Category 'Conditional Access' -Setting 'Conditional Access policy inventory' `
+        -Status (Get-CoverageState -Compliant $enabled.Count -Total $total) `
+        -Current ('{0} of {1} policies enabled, {2} report-only' -f $enabled.Count, $total, $reportOnly) `
+        -Expected 'Core policies enabled, not left in report-only' `
+        -Recommendation 'Report-only policies generate signal but block nothing. Promote validated policies to enabled.'
+
+    # ---- Helper predicates over the policy graph ----
+    # Each returns the count of ENABLED policies matching the pattern, plus the count
+    # sitting in report-only, so a half-finished rollout grades Yellow rather than Red.
+    function Measure-CaPattern {
+        param([scriptblock] $Predicate)
+
+        $matched     = @($policies | Where-Object { & $Predicate $_ })
+        $matchedOn   = @($matched | Where-Object { $_.state -eq 'enabled' }).Count
+        $matchedTest = @($matched | Where-Object { $_.state -eq 'enabledForReportingButNotEnforced' }).Count
+        return @{ Enabled = $matchedOn; ReportOnly = $matchedTest }
+    }
+
+    function Add-CaPatternResult {
+        param(
+            [string] $Setting,
+            [hashtable] $Counts,
+            [string] $Expected,
+            [string] $Recommendation
+        )
+
+        if ($Counts.Enabled -gt 0) {
+            $state   = 'Green'
+            $current = ('{0} enabled policy(ies) match' -f $Counts.Enabled)
+        }
+        elseif ($Counts.ReportOnly -gt 0) {
+            $state   = 'Yellow'
+            $current = ('{0} matching policy(ies), all report-only' -f $Counts.ReportOnly)
+        }
+        else {
+            $state   = 'Red'
+            $current = 'No matching policy found'
+        }
+
+        Add-Result -Product $Product -Category 'Conditional Access' -Setting $Setting `
+            -Status $state -Current $current -Expected $Expected -Recommendation $Recommendation
+    }
+
+    # MFA for administrators - a policy granting MFA scoped to directory roles.
+    $adminMfa = Measure-CaPattern {
+        param($p)
+        $grant = Get-PropertyValue (Get-PropertyValue $p 'grantControls') 'builtInControls'
+        $roles = Get-PropertyValue (Get-PropertyValue (Get-PropertyValue $p 'conditions') 'users') 'includeRoles'
+        ($grant -contains 'mfa') -and ($null -ne $roles) -and (@($roles).Count -gt 0)
+    }
+    Add-CaPatternResult -Setting 'MFA required for administrators' -Counts $adminMfa `
+        -Expected 'An enabled policy requiring MFA for directory roles' `
+        -Recommendation 'Create a Conditional Access policy targeting privileged directory roles with a Require MFA grant. This is the single highest-value CA policy.'
+
+    # MFA for all users.
+    $allUserMfa = Measure-CaPattern {
+        param($p)
+        $grant = Get-PropertyValue (Get-PropertyValue $p 'grantControls') 'builtInControls'
+        $users = Get-PropertyValue (Get-PropertyValue (Get-PropertyValue $p 'conditions') 'users') 'includeUsers'
+        ($grant -contains 'mfa') -and ($users -contains 'All')
+    }
+    Add-CaPatternResult -Setting 'MFA required for all users' -Counts $allUserMfa `
+        -Expected 'An enabled policy requiring MFA for all users' `
+        -Recommendation 'Require MFA for all users, excluding only your break-glass accounts.'
+
+    # Block legacy authentication - targets legacy client app types.
+    $legacyAuth = Measure-CaPattern {
+        param($p)
+        $clientTypes = Get-PropertyValue (Get-PropertyValue $p 'conditions') 'clientAppTypes'
+        $grant       = Get-PropertyValue (Get-PropertyValue $p 'grantControls') 'builtInControls'
+        $hasLegacy   = ($clientTypes -contains 'exchangeActiveSync') -or ($clientTypes -contains 'other')
+        $hasLegacy -and ($grant -contains 'block')
+    }
+    Add-CaPatternResult -Setting 'Legacy authentication blocked' -Counts $legacyAuth `
+        -Expected 'An enabled policy blocking legacy authentication clients' `
+        -Recommendation 'Legacy auth protocols cannot present MFA. Block exchangeActiveSync and other clients outright - this closes the most common password-spray path.'
+
+    # Device compliance / hybrid join requirement.
+    $deviceTrust = Measure-CaPattern {
+        param($p)
+        $grant = Get-PropertyValue (Get-PropertyValue $p 'grantControls') 'builtInControls'
+        ($grant -contains 'compliantDevice') -or ($grant -contains 'domainJoinedDevice')
+    }
+    Add-CaPatternResult -Setting 'Compliant or hybrid-joined device required' -Counts $deviceTrust `
+        -Expected 'An enabled policy requiring a compliant or hybrid-joined device' `
+        -Recommendation 'Requiring device trust stops credential replay from unmanaged machines even when the password and MFA are both satisfied.'
+
+    # Sign-in risk policy (Identity Protection, P2).
+    $signInRisk = Measure-CaPattern {
+        param($p)
+        $levels = Get-PropertyValue (Get-PropertyValue $p 'conditions') 'signInRiskLevels'
+        ($null -ne $levels) -and (@($levels).Count -gt 0)
+    }
+    Add-CaPatternResult -Setting 'Sign-in risk policy' -Counts $signInRisk `
+        -Expected 'An enabled policy acting on sign-in risk' `
+        -Recommendation 'Requires Entra ID P2. Challenge or block medium and high sign-in risk so token replay and impossible-travel are handled automatically.'
+
+    # User risk policy.
+    $userRisk = Measure-CaPattern {
+        param($p)
+        $levels = Get-PropertyValue (Get-PropertyValue $p 'conditions') 'userRiskLevels'
+        ($null -ne $levels) -and (@($levels).Count -gt 0)
+    }
+    Add-CaPatternResult -Setting 'User risk policy' -Counts $userRisk `
+        -Expected 'An enabled policy acting on user risk' `
+        -Recommendation 'Requires Entra ID P2. Force a secure password change on high user risk so leaked-credential accounts self-remediate.'
+
+    # Break-glass exclusions. At least one policy should exclude emergency accounts,
+    # otherwise a bad CA policy can lock every administrator out of the tenant.
+    $withExclusions = @($policies | Where-Object {
+        $excluded = Get-PropertyValue (Get-PropertyValue (Get-PropertyValue $_ 'conditions') 'users') 'excludeUsers'
+        ($null -ne $excluded) -and (@($excluded).Count -gt 0)
+    }).Count
+
+    $breakGlassState = 'Red'
+    if ($withExclusions -gt 0) { $breakGlassState = 'Green' }
+
+    Add-Result -Product $Product -Category 'Conditional Access' -Setting 'Break-glass account exclusions' `
+        -Status $breakGlassState -Current ('{0} of {1} policies exclude specific users' -f $withExclusions, $total) `
+        -Expected 'Emergency access accounts excluded from CA policies' `
+        -Recommendation 'Maintain two cloud-only emergency access accounts excluded from all CA policies. Without them a misconfigured policy can lock you out of your own tenant.'
+}
+
+function Test-EntraAuthMethods {
+    <# Which authentication methods are enabled, split by phishing resistance. #>
+    param([string] $Product)
+
+    # authenticationMethodConfigurations is automatically expanded on this GET.
+    $policy = Invoke-Safely -Label 'authentication methods policy' -Script {
+        Invoke-GraphGet -Uri '/v1.0/policies/authenticationMethodsPolicy'
+    }
+
+    if ($null -eq $policy -or @($policy).Count -eq 0) {
+        Add-Result -Product $Product -Category 'Authentication methods' -Setting 'Authentication methods policy' `
+            -Status 'Gray' -Current 'Could not read authenticationMethodsPolicy' `
+            -Expected 'Phishing-resistant methods enabled' `
+            -Recommendation 'Grant Policy.Read.AuthenticationMethod or Policy.Read.All. Global Reader or Authentication Policy Administrator is sufficient.'
+        return
+    }
+
+    $configs = Get-PropertyValue @($policy)[0] 'authenticationMethodConfigurations'
+
+    if ($null -eq $configs) {
+        Add-Result -Product $Product -Category 'Authentication methods' -Setting 'Authentication methods policy' `
+            -Status 'Gray' -Current 'Policy returned no method configurations' `
+            -Expected 'Phishing-resistant methods enabled' `
+            -Recommendation 'Review Entra admin center > Authentication methods > Policies.'
+        return
+    }
+
+    $lookup = @{}
+    foreach ($config in @($configs)) {
+        $id = "$(Get-PropertyValue $config 'id')"
+        if ($id) { $lookup[$id.ToLowerInvariant()] = "$(Get-PropertyValue $config 'state')" }
+    }
+
+    Write-Step -Message ('Retrieved {0} authentication method configurations' -f $lookup.Count) -State 'Info'
+
+    # ---- Phishing-resistant / strong methods: should be enabled ----
+    $strongEnabled = 0
+    foreach ($method in $script:EntraStrongAuthMethods) {
+        $key   = $method.Id.ToLowerInvariant()
+        $state = $null
+        if ($lookup.ContainsKey($key)) { $state = $lookup[$key] }
+
+        if ($null -eq $state) {
+            Add-Result -Product $Product -Category 'Authentication methods' -Setting ('Method: {0}' -f $method.Name) `
+                -Status 'Gray' -Current 'Not present in the policy response' -Expected 'enabled' `
+                -Recommendation 'This method may not be available in your cloud or licence tier. Review in the Entra admin center.'
+            continue
+        }
+
+        $isOn = ($state -eq 'enabled')
+        if ($isOn) { $strongEnabled++ }
+
+        $methodState = 'Red'
+        if ($isOn) { $methodState = 'Green' }
+
+        Add-Result -Product $Product -Category 'Authentication methods' -Setting ('Method: {0}' -f $method.Name) `
+            -Status $methodState -Current ("state = $state") -Expected 'enabled' `
+            -Recommendation ('Enable {0} in Entra admin center > Authentication methods. Phishing-resistant methods are the goal state for privileged users.' -f $method.Name)
+    }
+
+    $phishResistantState = 'Red'
+    if ($strongEnabled -ge 2)    { $phishResistantState = 'Green' }
+    elseif ($strongEnabled -eq 1) { $phishResistantState = 'Yellow' }
+
+    Add-Result -Product $Product -Category 'Authentication methods' -Setting 'Phishing-resistant method coverage' `
+        -Status $phishResistantState -Current ('{0} strong method(s) enabled' -f $strongEnabled) `
+        -Expected 'At least two strong methods enabled' `
+        -Recommendation 'Enable FIDO2 and Microsoft Authenticator at minimum, so privileged users have a phishing-resistant primary and a usable backup.'
+
+    # ---- Weak methods: legitimate but phishable, so Yellow when on ----
+    foreach ($method in $script:EntraWeakAuthMethods) {
+        $key   = $method.Id.ToLowerInvariant()
+        $state = $null
+        if ($lookup.ContainsKey($key)) { $state = $lookup[$key] }
+
+        if ($null -eq $state) { continue }
+
+        $weakState = 'Green'
+        $weakRec   = ('{0} is disabled. No action required.' -f $method.Name)
+        if ($state -eq 'enabled') {
+            $weakState = 'Yellow'
+            $weakRec   = ('{0} is enabled. It is interceptable and phishable - keep it as a fallback only, and exclude privileged users from it.' -f $method.Name)
+        }
+
+        Add-Result -Product $Product -Category 'Authentication methods' -Setting ('Weak method: {0}' -f $method.Name) `
+            -Status $weakState -Current ("state = $state") -Expected 'disabled, or restricted to non-privileged users' `
+            -Recommendation $weakRec
+    }
+
+    # ---- Registration campaign / enforcement ----
+    $enforcement = Get-PropertyValue @($policy)[0] 'registrationEnforcement'
+    $campaign    = Get-PropertyValue $enforcement 'authenticationMethodsRegistrationCampaign'
+    $campaignState = Get-PropertyValue $campaign 'state'
+
+    $regState = 'Gray'
+    if ($campaignState -eq 'enabled')       { $regState = 'Green' }
+    elseif ($campaignState -eq 'disabled')  { $regState = 'Yellow' }
+
+    Add-Result -Product $Product -Category 'Authentication methods' -Setting 'Registration campaign' `
+        -Status $regState -Current ("state = $campaignState") -Expected 'enabled' `
+        -Recommendation 'Nudging users to register Microsoft Authenticator at sign-in migrates them off SMS without a helpdesk-driven project.'
+
+    # ---- Policy migration state ----
+    $migration = Get-PropertyValue @($policy)[0] 'policyMigrationState'
+
+    $migrationState = 'Gray'
+    if ($migration -eq 'migrationComplete')      { $migrationState = 'Green' }
+    elseif ($migration -eq 'migrationInProgress') { $migrationState = 'Yellow' }
+    elseif ($migration -eq 'premigration')        { $migrationState = 'Red' }
+
+    Add-Result -Product $Product -Category 'Authentication methods' -Setting 'Authentication methods policy migration' `
+        -Status $migrationState -Current ("policyMigrationState = $migration") -Expected 'migrationComplete' `
+        -Recommendation 'Until migration completes, the legacy per-user MFA and SSPR policies still apply alongside the modern policy. Finish the migration so one policy governs both.'
+}
+
+function Test-EntraPrivilegedRoles {
+    <#
+        Standing privilege is the core identity risk: a permanently assigned Global
+        Administrator is a permanently available target. This grades role assignment
+        counts and, critically, the ratio of permanent to PIM-eligible assignments.
+    #>
+    param([string] $Product)
+
+    $definitions = Invoke-Safely -Label 'role definitions' -Script {
+        Invoke-GraphGet -Uri '/v1.0/roleManagement/directory/roleDefinitions'
+    }
+
+    if ($null -eq $definitions) {
+        Add-Result -Product $Product -Category 'Privileged access' -Setting 'Privileged role assignments' `
+            -Status 'Gray' -Current 'Could not read role definitions' `
+            -Expected 'Few permanent admins, the rest PIM-eligible' `
+            -Recommendation 'Grant RoleManagement.Read.Directory or Directory.Read.All.'
+        return
+    }
+
+    # displayName -> id, and id -> displayName for reverse lookup.
+    $roleIdByName = @{}
+    $roleNameById = @{}
+    foreach ($definition in @($definitions)) {
+        $name = "$(Get-PropertyValue $definition 'displayName')"
+        $id   = "$(Get-PropertyValue $definition 'id')"
+        if ($name -and $id) {
+            $roleIdByName[$name] = $id
+            $roleNameById[$id]   = $name
+        }
+    }
+
+    Write-Step -Message ('Retrieved {0} role definitions' -f $roleNameById.Count) -State 'Info'
+
+    $assignments = Invoke-Safely -Label 'role assignments' -Script {
+        Invoke-GraphGet -Uri '/v1.0/roleManagement/directory/roleAssignments'
+    }
+
+    if ($null -eq $assignments) {
+        Add-Result -Product $Product -Category 'Privileged access' -Setting 'Privileged role assignments' `
+            -Status 'Gray' -Current 'Could not read role assignments' `
+            -Expected 'Few permanent admins, the rest PIM-eligible' `
+            -Recommendation 'Grant RoleManagement.Read.Directory or Directory.Read.All.'
+        return
+    }
+
+    # PIM eligibility. Absent PIM licensing this returns nothing or errors, which is
+    # reported as Gray rather than Red - no PIM is a licensing state, not a misconfig.
+    $eligible = Invoke-Safely -Label 'PIM eligibility schedules' -Script {
+        Invoke-GraphGet -Uri '/v1.0/roleManagement/directory/roleEligibilitySchedules'
+    }
+
+    $permanentByRole = @{}
+    foreach ($assignment in @($assignments)) {
+        $roleId = "$(Get-PropertyValue $assignment 'roleDefinitionId')"
+        if (-not $roleId) { continue }
+        if (-not $permanentByRole.ContainsKey($roleId)) { $permanentByRole[$roleId] = 0 }
+        $permanentByRole[$roleId]++
+    }
+
+    $eligibleByRole = @{}
+    if ($null -ne $eligible) {
+        foreach ($schedule in @($eligible)) {
+            $roleId = "$(Get-PropertyValue $schedule 'roleDefinitionId')"
+            if (-not $roleId) { continue }
+            if (-not $eligibleByRole.ContainsKey($roleId)) { $eligibleByRole[$roleId] = 0 }
+            $eligibleByRole[$roleId]++
+        }
+    }
+
+    # ---- Global Administrator count ----
+    # Microsoft's guidance is to keep this small. Too few is also a finding: with fewer
+    # than two you have no break-glass path if the sole admin is locked out.
+    $gaId = $roleIdByName['Global Administrator']
+    if ($gaId) {
+        $gaPermanent = 0
+        if ($permanentByRole.ContainsKey($gaId)) { $gaPermanent = $permanentByRole[$gaId] }
+
+        $gaEligible = 0
+        if ($eligibleByRole.ContainsKey($gaId)) { $gaEligible = $eligibleByRole[$gaId] }
+
+        if ($gaPermanent -ge 2 -and $gaPermanent -le 4) {
+            $gaState = 'Green'
+            $gaRec   = 'Count is in the recommended range. Confirm these are break-glass accounts and day-to-day admin runs through PIM.'
+        }
+        elseif ($gaPermanent -lt 2) {
+            $gaState = 'Red'
+            $gaRec   = 'Fewer than two permanent Global Administrators leaves no emergency access path. Maintain exactly two cloud-only break-glass accounts.'
+        }
+        elseif ($gaPermanent -le 8) {
+            $gaState = 'Yellow'
+            $gaRec   = 'More permanent Global Administrators than necessary. Move day-to-day admins to PIM-eligible and keep only break-glass accounts permanent.'
+        }
+        else {
+            $gaState = 'Red'
+            $gaRec   = 'Far too many standing Global Administrators. Each one is a permanent high-value target. Move them to PIM-eligible assignments.'
+        }
+
+        Add-Result -Product $Product -Category 'Privileged access' -Setting 'Global Administrator count' `
+            -Status $gaState -Current ('{0} permanent, {1} PIM-eligible' -f $gaPermanent, $gaEligible) `
+            -Expected '2-4 permanent (break-glass only), the rest PIM-eligible' -Recommendation $gaRec
+    }
+
+    # ---- Standing privilege across all privileged roles ----
+    $totalPermanent = 0
+    $totalEligible  = 0
+
+    foreach ($roleName in $script:EntraPrivilegedRoles) {
+        $roleId = $roleIdByName[$roleName]
+        if (-not $roleId) { continue }
+
+        $permanent = 0
+        if ($permanentByRole.ContainsKey($roleId)) { $permanent = $permanentByRole[$roleId] }
+
+        $eligibleCount = 0
+        if ($eligibleByRole.ContainsKey($roleId)) { $eligibleCount = $eligibleByRole[$roleId] }
+
+        $totalPermanent += $permanent
+        $totalEligible  += $eligibleCount
+
+        # Only report roles that are actually in use, to keep the table meaningful.
+        if ($permanent -eq 0 -and $eligibleCount -eq 0) { continue }
+
+        if ($permanent -eq 0 -and $eligibleCount -gt 0) {
+            $roleState = 'Green'
+            $roleRec   = 'All assignments are just-in-time. No action required.'
+        }
+        elseif ($eligibleCount -gt 0) {
+            $roleState = 'Yellow'
+            $roleRec   = 'Mixed model. Move the remaining permanent assignments to PIM-eligible unless they are documented break-glass accounts.'
+        }
+        else {
+            $roleState = 'Red'
+            $roleRec   = 'All assignments are permanent. Standing privilege in this role is available to an attacker at any hour without approval or justification.'
+        }
+
+        # Global Administrator is graded separately above; skip the duplicate row.
+        if ($roleName -eq 'Global Administrator') { continue }
+
+        Add-Result -Product $Product -Category 'Privileged role detail' -Setting ('Role: {0}' -f $roleName) `
+            -Status $roleState -Current ('{0} permanent, {1} PIM-eligible' -f $permanent, $eligibleCount) `
+            -Expected 'PIM-eligible rather than permanent' -Recommendation $roleRec
+    }
+
+    # ---- Overall PIM adoption ----
+    if ($null -eq $eligible) {
+        Add-Result -Product $Product -Category 'Privileged access' -Setting 'PIM adoption' `
+            -Status 'Gray' -Current 'Could not read PIM eligibility schedules' `
+            -Expected 'Most privileged assignments PIM-eligible' `
+            -Recommendation 'PIM requires Entra ID P2. If you are licensed, grant RoleManagement.Read.Directory and re-run.'
+    }
+    else {
+        $totalAssignments = $totalPermanent + $totalEligible
+
+        if ($totalAssignments -eq 0) {
+            $pimState   = 'Gray'
+            $pimCurrent = 'No privileged assignments found'
+            $pimRec     = 'No assignments were returned for the tracked privileged roles. Verify read permissions.'
+        }
+        elseif ($totalEligible -eq 0) {
+            $pimState   = 'Red'
+            $pimCurrent = ('{0} permanent assignments, 0 eligible' -f $totalPermanent)
+            $pimRec     = 'No PIM usage at all. Every privileged assignment is standing. Onboard privileged roles into PIM and require approval plus justification on activation.'
+        }
+        elseif ($totalEligible -ge $totalPermanent) {
+            $pimState   = 'Green'
+            $pimCurrent = ('{0} eligible vs {1} permanent' -f $totalEligible, $totalPermanent)
+            $pimRec     = 'Majority of privileged access is just-in-time. Confirm the remaining permanent assignments are break-glass only.'
+        }
+        else {
+            $pimState   = 'Yellow'
+            $pimCurrent = ('{0} eligible vs {1} permanent' -f $totalEligible, $totalPermanent)
+            $pimRec     = 'PIM is in use but permanent assignments still outnumber eligible ones. Continue converting standing roles to just-in-time.'
+        }
+
+        Add-Result -Product $Product -Category 'Privileged access' -Setting 'PIM adoption' `
+            -Status $pimState -Current $pimCurrent `
+            -Expected 'Most privileged assignments PIM-eligible' -Recommendation $pimRec
+    }
+}
+
+function Test-EntraAuthorizationPolicy {
+    <#
+        Default user permissions and guest access. These are the settings that quietly
+        allow any user to register apps, invite guests, or create tenants - each of
+        which is a lateral-movement or shadow-IT path.
+    #>
+    param([string] $Product)
+
+    $policy = Invoke-Safely -Label 'authorization policy' -Script {
+        Invoke-GraphGet -Uri '/v1.0/policies/authorizationPolicy'
+    }
+
+    if ($null -eq $policy -or @($policy).Count -eq 0) {
+        Add-Result -Product $Product -Category 'User settings' -Setting 'Authorization policy' `
+            -Status 'Gray' -Current 'Could not read authorizationPolicy' `
+            -Expected 'Default user permissions restricted' `
+            -Recommendation 'Grant Policy.Read.All.'
+        return
+    }
+
+    $auth        = @($policy)[0]
+    $permissions = Get-PropertyValue $auth 'defaultUserRolePermissions'
+
+    # ---- Default user permissions ----
+    $userPermissionChecks = @(
+        @{
+            Property = 'allowedToCreateApps'
+            Label    = 'Users can register applications'
+            Rec      = 'Set to No. App registration by standard users is a common consent-phishing and shadow-IT path.'
+        }
+        @{
+            Property = 'allowedToCreateSecurityGroups'
+            Label    = 'Users can create security groups'
+            Rec      = 'Set to No unless self-service groups are a deliberate design decision. Security groups can grant access.'
+        }
+        @{
+            Property = 'allowedToCreateTenants'
+            Label    = 'Users can create tenants'
+            Rec      = 'Set to No. A user-created tenant is completely outside your governance, monitoring and DLP.'
+        }
+        @{
+            Property = 'allowedToReadOtherUsers'
+            Label    = 'Users can read other users'
+            Rec      = 'Usually left on for directory usability. Restrict only if you have a specific confidentiality requirement.'
+        }
+    )
+
+    foreach ($check in $userPermissionChecks) {
+        $value = Get-PropertyValue $permissions $check.Property
+
+        if ($null -eq $value) {
+            Add-Result -Product $Product -Category 'User settings' -Setting $check.Label `
+                -Status 'Gray' -Current 'Property not returned' -Expected 'False' `
+                -Recommendation 'Review in Entra admin center > Users > User settings.'
+            continue
+        }
+
+        # allowedToReadOtherUsers being true is normal and expected, so it is not
+        # graded as a failure - it is informational and reported Green either way.
+        if ($check.Property -eq 'allowedToReadOtherUsers') {
+            Add-Result -Product $Product -Category 'User settings' -Setting $check.Label `
+                -Status 'Green' -Current ("$value") -Expected 'True (default) unless restricted by design' `
+                -Recommendation $check.Rec
+            continue
+        }
+
+        Add-Result -Product $Product -Category 'User settings' -Setting $check.Label `
+            -Status (Get-BoolState $value -InvertGood) -Current ("$value") -Expected 'False' `
+            -Recommendation $check.Rec
+    }
+
+    # ---- Legacy MSOnline PowerShell ----
+    $blockMsol = Get-PropertyValue $auth 'blockMsolPowerShell'
+    Add-Result -Product $Product -Category 'User settings' -Setting 'Legacy MSOnline PowerShell blocked' `
+        -Status (Get-BoolState $blockMsol) -Current ("blockMsolPowerShell = $blockMsol") -Expected 'True' `
+        -Recommendation 'Block the deprecated MSOnline module. It supports legacy authentication patterns and bypasses modern controls.'
+
+    # ---- Self-service sign-up ----
+    $emailJoin = Get-PropertyValue $auth 'allowEmailVerifiedUsersToJoinOrganization'
+    Add-Result -Product $Product -Category 'User settings' -Setting 'Email-verified users can join the tenant' `
+        -Status (Get-BoolState $emailJoin -InvertGood) -Current ("allowEmailVerifiedUsersToJoinOrganization = $emailJoin") `
+        -Expected 'False' `
+        -Recommendation 'Set to False. Otherwise anyone who can verify an email address in a matching domain can self-provision an account.'
+
+    # ---- Guest invitation restrictions ----
+    $allowInvitesFrom = "$(Get-PropertyValue $auth 'allowInvitesFrom')"
+
+    switch -Regex ($allowInvitesFrom) {
+        '^(?i)none$' {
+            $inviteState = 'Green'
+            $inviteRec   = 'Guest invitations are blocked entirely. No action required.'
+        }
+        '^(?i)adminsAndGuestInviters$' {
+            $inviteState = 'Green'
+            $inviteRec   = 'Only admins and designated inviters can invite guests. This is the recommended setting.'
+        }
+        '^(?i)adminsGuestInvitersAndAllMembers$' {
+            $inviteState = 'Yellow'
+            $inviteRec   = 'All members can invite guests. Acceptable for collaboration-heavy tenants, but it removes any gate on external access.'
+        }
+        '^(?i)everyone$' {
+            $inviteState = 'Red'
+            $inviteRec   = 'Existing guests can invite further guests. Restrict to adminsAndGuestInviters so external access stays governed.'
+        }
+        default {
+            $inviteState = 'Gray'
+            $inviteRec   = 'Value not recognised. Review in Entra admin center > External Identities > External collaboration settings.'
+        }
+    }
+
+    Add-Result -Product $Product -Category 'External access' -Setting 'Who can invite guests' `
+        -Status $inviteState -Current ("allowInvitesFrom = $allowInvitesFrom") `
+        -Expected 'adminsAndGuestInviters (or none)' -Recommendation $inviteRec
+
+    # ---- Guest permission level ----
+    # These three template IDs are the documented guest role options. An unrecognised
+    # value reports Gray rather than being guessed at.
+    $guestRoleId = "$(Get-PropertyValue $auth 'guestUserRoleId')"
+
+    $guestRoles = @{
+        '2af84b1e-32c8-42b7-82bc-daa82404023b' = @{ Name = 'Restricted Guest'; State = 'Green';  Rec = 'Most restrictive guest access. No action required.' }
+        '10dae51f-b6af-4016-8d66-8c2a99b929b3' = @{ Name = 'Guest User';       State = 'Yellow'; Rec = 'Default guest access. Consider Restricted Guest, which blocks directory enumeration by external users.' }
+        'a0b1b346-4d3e-4e8b-98f8-753987be4970' = @{ Name = 'Same as member';   State = 'Red';    Rec = 'Guests have the same directory permissions as employees. Change this to Restricted Guest.' }
+    }
+
+    if ($guestRoles.ContainsKey($guestRoleId)) {
+        $guest = $guestRoles[$guestRoleId]
+        Add-Result -Product $Product -Category 'External access' -Setting 'Guest user permission level' `
+            -Status $guest.State -Current $guest.Name -Expected 'Restricted Guest' -Recommendation $guest.Rec
+    }
+    else {
+        Add-Result -Product $Product -Category 'External access' -Setting 'Guest user permission level' `
+            -Status 'Gray' -Current ("guestUserRoleId = $guestRoleId") -Expected 'Restricted Guest' `
+            -Recommendation 'Guest role ID not recognised. Review in Entra admin center > External Identities > External collaboration settings.'
+    }
+
+    # ---- User consent to applications ----
+    $grantPolicies = Get-PropertyValue $permissions 'permissionGrantPoliciesAssigned'
+    $grantText     = (@($grantPolicies) -join ';')
+
+    if ([string]::IsNullOrWhiteSpace($grantText)) {
+        $consentState = 'Green'
+        $consentRec   = 'Users cannot consent to applications. Admin consent is required throughout.'
+        $consentText  = 'No user consent policy assigned (consent disabled)'
+    }
+    elseif ($grantText -match '(?i)legacy') {
+        $consentState = 'Red'
+        $consentRec   = 'The legacy consent policy lets users consent to any app requesting any non-admin permission. Move to the low-risk permission set, or require admin consent.'
+        $consentText  = $grantText
+    }
+    elseif ($grantText -match '(?i)low') {
+        $consentState = 'Green'
+        $consentRec   = 'Users can consent only to low-risk permissions from verified publishers. This is the recommended setting.'
+        $consentText  = $grantText
+    }
+    else {
+        $consentState = 'Yellow'
+        $consentRec   = 'A custom consent policy is in force. Confirm it limits consent to low-risk permissions from verified publishers.'
+        $consentText  = $grantText
+    }
+
+    Add-Result -Product $Product -Category 'Application governance' -Setting 'User consent to applications' `
+        -Status $consentState -Current $consentText `
+        -Expected 'Low-risk permissions only, or admin consent required' -Recommendation $consentRec
+
+    # ---- Admin consent workflow ----
+    # If user consent is restricted but there is no request workflow, users have no
+    # sanctioned route and will work around the control.
+    $consentPolicy = Invoke-Safely -Label 'admin consent request policy' -Script {
+        Invoke-GraphGet -Uri '/v1.0/policies/adminConsentRequestPolicy'
+    }
+
+    if ($null -eq $consentPolicy -or @($consentPolicy).Count -eq 0) {
+        Add-Result -Product $Product -Category 'Application governance' -Setting 'Admin consent request workflow' `
+            -Status 'Gray' -Current 'Could not read adminConsentRequestPolicy' -Expected 'Enabled' `
+            -Recommendation 'Grant Policy.Read.All.'
+        return
+    }
+
+    $consentWorkflow = Get-PropertyValue @($consentPolicy)[0] 'isEnabled'
+
+    Add-Result -Product $Product -Category 'Application governance' -Setting 'Admin consent request workflow' `
+        -Status (Get-BoolState $consentWorkflow) -Current ("isEnabled = $consentWorkflow") -Expected 'True' `
+        -Recommendation 'Enable the admin consent workflow so users have a sanctioned path to request app access instead of finding workarounds.'
+}
+
+#endregion
+
+# =====================================================================================
+# REGION: MODULE 2 - Microsoft Defender for Cloud
 # =====================================================================================
 #region Defender for Cloud
 
@@ -1239,7 +2027,7 @@ function Test-MdcSecureScore {
 #endregion
 
 # =====================================================================================
-# REGION: MODULE 2 - Microsoft Defender for Endpoint
+# REGION: MODULE 3 - Microsoft Defender for Endpoint
 # =====================================================================================
 #region Defender for Endpoint
 
@@ -1667,7 +2455,7 @@ function Test-MdeDevicePosture {
 #endregion
 
 # =====================================================================================
-# REGION: MODULE 3 - Microsoft Defender for Identity
+# REGION: MODULE 4 - Microsoft Defender for Identity
 # =====================================================================================
 #region Defender for Identity
 
@@ -1798,7 +2586,7 @@ function Test-MdiHealthIssues {
 #endregion
 
 # =====================================================================================
-# REGION: MODULE 4 - Microsoft Defender for Office 365
+# REGION: MODULE 5 - Microsoft Defender for Office 365
 # =====================================================================================
 #region Defender for Office
 
@@ -2277,7 +3065,7 @@ function Test-MdoTenantHygiene {
 #endregion
 
 # =====================================================================================
-# REGION: MODULE 5 - Microsoft Defender for Cloud Apps
+# REGION: MODULE 6 - Microsoft Defender for Cloud Apps
 # =====================================================================================
 #region Defender for Cloud Apps
 
@@ -2348,7 +3136,7 @@ function Test-MdaConditionalAccess {
     <# Session and access control depend on CA policies routing traffic through MDA. #>
     param([string] $Product)
 
-    $policies = Invoke-Safely -Label 'Conditional Access policies' -Script {
+    $policies = Invoke-Safely -Label 'Conditional Access policies (MDA)' -Script {
         Invoke-GraphGet -Uri '/v1.0/identity/conditionalAccess/policies'
     }
 
@@ -2382,19 +3170,6 @@ function Test-MdaConditionalAccess {
     Add-Result -Product $Product -Category 'App control' -Setting 'Conditional Access App Control' `
         -Status $state -Current $current -Expected 'At least one enabled session policy routing apps through MDA' `
         -Recommendation 'Create a Conditional Access policy with a Conditional Access App Control session control, then move it from report-only to enabled.'
-
-    # Session policies are only useful if some are enforced - flag blanket report-only estates.
-    $allPolicies   = @($policies).Count
-    $allReportOnly = @($policies | Where-Object { $_.state -eq 'enabledForReportingButNotEnforced' }).Count
-
-    $reportState = 'Green'
-    if ($allPolicies -eq 0)                  { $reportState = 'Red' }
-    elseif ($allReportOnly -ge $allPolicies) { $reportState = 'Yellow' }
-
-    Add-Result -Product $Product -Category 'App control' -Setting 'Conditional Access enforcement posture' `
-        -Status $reportState -Current ('{0} of {1} CA policies are report-only' -f $allReportOnly, $allPolicies) `
-        -Expected 'Core policies enforced, not report-only' `
-        -Recommendation 'Report-only policies generate signal but block nothing. Promote validated policies to enabled.'
 }
 
 function Test-MdaLegacyApi {
@@ -2450,7 +3225,7 @@ function Test-MdaLegacyApi {
 #endregion
 
 # =====================================================================================
-# REGION: MODULE 6 - Microsoft Purview
+# REGION: MODULE 7 - Microsoft Purview
 # =====================================================================================
 #region Purview
 
@@ -3175,7 +3950,7 @@ function New-HtmlReport {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Microsoft Defender &amp; Purview Best Practice Report</title>
+<title>Microsoft Entra, Defender &amp; Purview Best Practice Report</title>
 <style>
   :root {
     --green:#107c10; --green-bg:#dff6dd;
@@ -3289,7 +4064,7 @@ function New-HtmlReport {
 
     [void]$sb.Append(@"
 <header>
-  <h1>Microsoft Defender &amp; Purview Best Practice Report</h1>
+  <h1>Microsoft Entra, Defender &amp; Purview Best Practice Report</h1>
   <div class="meta">Tenant: $tenantSafe &nbsp;|&nbsp; Generated: $generated &nbsp;|&nbsp; Runtime: ${duration}s &nbsp;|&nbsp; Cloud: $Cloud</div>
 </header>
 <div class="wrap">
@@ -3333,8 +4108,9 @@ function New-HtmlReport {
 
     # ---- Per-product tables ----
     $productOrder = @(
-        'Defender for Cloud', 'Defender for Endpoint', 'Defender for Identity',
-        'Defender for Office 365', 'Defender for Cloud Apps', 'Microsoft Purview'
+        'Microsoft Entra ID', 'Defender for Cloud', 'Defender for Endpoint',
+        'Defender for Identity', 'Defender for Office 365', 'Defender for Cloud Apps',
+        'Microsoft Purview'
     )
     $present = $Data | Select-Object -ExpandProperty Product -Unique
     $ordered = @($productOrder | Where-Object { $present -contains $_ }) +
@@ -3434,7 +4210,7 @@ applyThemeLabel(document.documentElement.getAttribute('data-theme') || 'light');
 
 Write-Host ''
 Write-Host '============================================================' -ForegroundColor DarkCyan
-Write-Host ' Microsoft Defender & Purview Best Practice Assessment' -ForegroundColor White
+Write-Host ' Microsoft Entra, Defender & Purview Best Practice Assessment' -ForegroundColor White
 Write-Host '============================================================' -ForegroundColor DarkCyan
 Write-Host ''
 
@@ -3463,6 +4239,7 @@ if (-not $SkipModuleCheck) {
 
 Connect-Workloads -Requested $Modules
 
+if ($Modules -contains 'Entra')                { Invoke-EntraChecks }
 if ($Modules -contains 'DefenderForCloud')     { Invoke-DefenderForCloudChecks }
 if ($Modules -contains 'DefenderForEndpoint')  { Invoke-DefenderForEndpointChecks }
 if ($Modules -contains 'DefenderForIdentity')  { Invoke-DefenderForIdentityChecks }
