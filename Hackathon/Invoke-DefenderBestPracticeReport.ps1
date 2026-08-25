@@ -657,6 +657,40 @@ function Invoke-Safely {
         return $null
     }
 }
+function Invoke-SafelyList {
+    <#
+        Collection-returning sibling of Invoke-Safely.
+
+        Returns a hashtable so that "failed" and "succeeded but empty" stay
+        distinguishable:
+
+            @{ Ok = $true;  Items = @(...); Error = $null }
+            @{ Ok = $false; Items = @();    Error = 'the actual exception text' }
+
+        Invoke-Safely returns $null for BOTH cases, because PowerShell collapses
+        an empty result to $null. That conflation is what made a tenant with zero
+        retention policies report as "Could not read retention policies".
+
+        The Error text is carried through deliberately - a 403 (permissions), a
+        404 (feature not provisioned) and a malformed request are three different
+        problems, and the report should say which one it hit.
+    #>
+    param(
+        [Parameter(Mandatory)][scriptblock] $Script,
+        [string] $Label = 'operation'
+    )
+
+    try {
+        $raw = & $Script
+        return @{ Ok = $true; Items = @($raw); Error = $null }
+    }
+    catch {
+        $message = $_.Exception.Message
+        Write-Verbose ('{0} failed: {1}' -f $Label, $message)
+        Write-Step -Message ('{0} failed: {1}' -f $Label, $message) -State 'Warn'
+        return @{ Ok = $false; Items = @(); Error = $message }
+    }
+}
 
 function Invoke-GraphGet {
     <# GET against Microsoft Graph with automatic @odata.nextLink paging. #>
@@ -2543,24 +2577,54 @@ function Test-MdiSensors {
 }
 
 function Test-MdiHealthIssues {
-    <# Open health issues, graded by highest open severity. #>
+    <#
+        Open health issues, graded by highest open severity.
+
+        Calls v1.0 (this endpoint is GA there) and deliberately does NOT use a
+        server-side $filter. The documented filter examples use "Status" while
+        the resource property is "status"; rather than bet on OData casing, we
+        fetch the collection unfiltered and filter in PowerShell, where -eq is
+        case-insensitive by default. The collection is small, so this costs
+        nothing and removes a whole class of failure.
+    #>
     param([string] $Product)
 
-    $issues = Invoke-Safely -Label 'MDI health issues' -Script {
-        Invoke-GraphGet -Uri "/beta/security/identities/healthIssues?`$filter=status eq 'open'"
+    # Called directly rather than through Invoke-Safely so the real exception
+    # message can be surfaced into the report instead of a generic "could not
+    # read". A 403 and a 404 mean very different things here.
+    $allIssues   = $null
+    $failureText = $null
+
+    try {
+        $allIssues = Invoke-GraphGet -Uri '/v1.0/security/identities/healthIssues'
+    }
+    catch {
+        $failureText = $_.Exception.Message
+        Write-Step -Message ('MDI health issues failed: {0}' -f $failureText) -State 'Warn'
     }
 
-    if ($null -eq $issues) {
+    if ($null -eq $allIssues) {
+        $current = 'Could not read /v1.0/security/identities/healthIssues'
+        if ($failureText) {
+            $current = ('Request failed: {0}' -f $failureText)
+        }
+
         Add-Result -Product $Product -Category 'Health' -Setting 'Open health issues' `
-            -Status 'Gray' -Current 'Could not read /security/identities/healthIssues' -Expected 'No open health issues' `
-            -Recommendation 'Grant SecurityIdentitiesHealth.Read.All.'
+            -Status 'Gray' -Current $current -Expected 'No open health issues' `
+            -Recommendation 'A 403 means the signed-in user needs Security Reader or Security Administrator in Entra, plus MDI access via Defender XDR Unified RBAC. A 404 usually means the MDI workspace is not provisioned rather than a permissions problem.'
         return
     }
 
-    $total  = @($issues).Count
-    $high   = @($issues | Where-Object { $_.severity -eq 'high' }).Count
-    $medium = @($issues | Where-Object { $_.severity -eq 'medium' }).Count
-    $low    = @($issues | Where-Object { $_.severity -eq 'low' }).Count
+    # Client-side status filter. PowerShell string -eq is case-insensitive, so
+    # 'Open', 'open' and 'OPEN' all match without any casing assumptions.
+    $issues = @($allIssues | Where-Object { "$(Get-PropertyValue $_ 'status')" -eq 'open' })
+
+    Write-Step -Message ('Retrieved {0} MDI health issue(s), {1} open' -f @($allIssues).Count, $issues.Count) -State 'Info'
+
+    $total  = $issues.Count
+    $high   = @($issues | Where-Object { "$(Get-PropertyValue $_ 'severity')" -eq 'high' }).Count
+    $medium = @($issues | Where-Object { "$(Get-PropertyValue $_ 'severity')" -eq 'medium' }).Count
+    $low    = @($issues | Where-Object { "$(Get-PropertyValue $_ 'severity')" -eq 'low' }).Count
 
     $state = 'Yellow'
     if ($total -eq 0)    { $state = 'Green' }
@@ -2572,7 +2636,7 @@ function Test-MdiHealthIssues {
         -Recommendation 'Resolve open issues under Defender portal > Settings > Identities > Health issues. High severity issues usually mean lost detection coverage.'
 
     # Break out the global (workspace-wide) issues separately - these hit every sensor.
-    $globalIssues = @($issues | Where-Object { $_.healthIssueType -eq 'global' }).Count
+    $globalIssues = @($issues | Where-Object { "$(Get-PropertyValue $_ 'healthIssueType')" -eq 'global' }).Count
 
     $globalState = 'Red'
     if ($globalIssues -eq 0) { $globalState = 'Green' }
@@ -2582,7 +2646,6 @@ function Test-MdiHealthIssues {
         -Current ('{0} global issue(s)' -f $globalIssues) -Expected '0 global issues' `
         -Recommendation 'Global issues such as missing directory service accounts or unresolved NNR affect every sensor. Fix these first.'
 }
-
 #endregion
 
 # =====================================================================================
@@ -3376,17 +3439,19 @@ function Test-PurviewDlp {
     <# DLP policy modes, workload coverage and whether any rule actually blocks. #>
     param([string] $Product)
 
-    $policies = Invoke-Safely -Label 'Get-DlpCompliancePolicy' -Script { Get-DlpCompliancePolicy -ErrorAction Stop }
+    $call = Invoke-SafelyList -Label 'Get-DlpCompliancePolicy' -Script {
+        Get-DlpCompliancePolicy -ErrorAction Stop
+    }
 
-    if ($null -eq $policies) {
+    if (-not $call.Ok) {
         Add-Result -Product $Product -Category 'Data loss prevention' -Setting 'DLP policy inventory' `
-            -Status 'Gray' -Current 'Could not read DLP policies' -Expected 'At least one enforced DLP policy' `
+            -Status 'Gray' -Current ('Request failed: {0}' -f $call.Error) -Expected 'At least one enforced DLP policy' `
             -Recommendation 'Confirm the account holds a DLP read role such as View-Only DLP Compliance Management.'
         return
     }
 
     # Exclude policies already flagged for deletion from the coverage maths.
-    $active = @($policies | Where-Object { (Get-PropertyValue $_ 'Mode') -ne 'PendingDeletion' })
+    $active = @($call.Items | Where-Object { (Get-PropertyValue $_ 'Mode') -ne 'PendingDeletion' })
     $total  = $active.Count
 
     if ($total -eq 0) {
@@ -3454,64 +3519,76 @@ function Test-PurviewDlp {
     }
 
     # Do any rules actually block, or is everything notify-only?
-    if (Test-CmdletAvailable -Name 'Get-DlpComplianceRule') {
-        $rules = Invoke-Safely -Label 'Get-DlpComplianceRule' -Script { Get-DlpComplianceRule -ErrorAction Stop }
+    if (-not (Test-CmdletAvailable -Name 'Get-DlpComplianceRule')) { return }
 
-        if ($null -eq $rules -or @($rules).Count -eq 0) {
-            Add-Result -Product $Product -Category 'Data loss prevention' -Setting 'DLP rules with blocking action' `
-                -Status 'Red' -Current 'No DLP rules found' -Expected 'At least one rule with BlockAccess enabled' `
-                -Recommendation 'A DLP policy with no rules does nothing. Add rules defining the sensitive info types and the block action.'
-        }
-        else {
-            $ruleTotal = @($rules).Count
-            $blocking  = @($rules | Where-Object { (Get-PropertyValue $_ 'BlockAccess') -eq $true }).Count
-            $notifying = @($rules | Where-Object {
-                (Get-PropertyValue $_ 'NotifyUser') -or (Get-PropertyValue $_ 'GenerateAlert')
-            }).Count
-
-            if ($blocking -gt 0) {
-                $ruleState   = 'Green'
-                $ruleCurrent = ('{0} of {1} rules block access' -f $blocking, $ruleTotal)
-            }
-            elseif ($notifying -gt 0) {
-                $ruleState   = 'Yellow'
-                $ruleCurrent = ('0 blocking, {0} of {1} rules notify or alert only' -f $notifying, $ruleTotal)
-            }
-            else {
-                $ruleState   = 'Red'
-                $ruleCurrent = ('{0} rules, none block or notify' -f $ruleTotal)
-            }
-
-            Add-Result -Product $Product -Category 'Data loss prevention' -Setting 'DLP rules with blocking action' `
-                -Status $ruleState -Current $ruleCurrent -Expected 'At least one rule with BlockAccess enabled' `
-                -Recommendation 'Notify-only rules build awareness but stop nothing. Set BlockAccess on rules covering your highest-risk sensitive info types.'
-
-            $incidentReports = @($rules | Where-Object { Get-PropertyValue $_ 'IncidentReportContent' }).Count
-            Add-Result -Product $Product -Category 'Data loss prevention' -Setting 'DLP incident reports' `
-                -Status (Get-CoverageState -Compliant $incidentReports -Total $ruleTotal) `
-                -Current ('Incident report configured on {0} of {1} rules' -f $incidentReports, $ruleTotal) `
-                -Expected 'Incident reports configured' `
-                -Recommendation 'Configure incident reports so DLP matches reach the SOC rather than sitting only in the Purview portal.'
-        }
+    $ruleCall = Invoke-SafelyList -Label 'Get-DlpComplianceRule' -Script {
+        Get-DlpComplianceRule -ErrorAction Stop
     }
+
+    if (-not $ruleCall.Ok) {
+        Add-Result -Product $Product -Category 'Data loss prevention' -Setting 'DLP rules with blocking action' `
+            -Status 'Gray' -Current ('Request failed: {0}' -f $ruleCall.Error) -Expected 'At least one rule with BlockAccess enabled' `
+            -Recommendation 'Verify DLP read permissions.'
+        return
+    }
+
+    $rules     = $ruleCall.Items
+    $ruleTotal = $rules.Count
+
+    if ($ruleTotal -eq 0) {
+        Add-Result -Product $Product -Category 'Data loss prevention' -Setting 'DLP rules with blocking action' `
+            -Status 'Red' -Current 'No DLP rules found' -Expected 'At least one rule with BlockAccess enabled' `
+            -Recommendation 'A DLP policy with no rules does nothing. Add rules defining the sensitive info types and the block action.'
+        return
+    }
+
+    $blocking  = @($rules | Where-Object { (Get-PropertyValue $_ 'BlockAccess') -eq $true }).Count
+    $notifying = @($rules | Where-Object {
+        (Get-PropertyValue $_ 'NotifyUser') -or (Get-PropertyValue $_ 'GenerateAlert')
+    }).Count
+
+    if ($blocking -gt 0) {
+        $ruleState   = 'Green'
+        $ruleCurrent = ('{0} of {1} rules block access' -f $blocking, $ruleTotal)
+    }
+    elseif ($notifying -gt 0) {
+        $ruleState   = 'Yellow'
+        $ruleCurrent = ('0 blocking, {0} of {1} rules notify or alert only' -f $notifying, $ruleTotal)
+    }
+    else {
+        $ruleState   = 'Red'
+        $ruleCurrent = ('{0} rules, none block or notify' -f $ruleTotal)
+    }
+
+    Add-Result -Product $Product -Category 'Data loss prevention' -Setting 'DLP rules with blocking action' `
+        -Status $ruleState -Current $ruleCurrent -Expected 'At least one rule with BlockAccess enabled' `
+        -Recommendation 'Notify-only rules build awareness but stop nothing. Set BlockAccess on rules covering your highest-risk sensitive info types.'
+
+    $incidentReports = @($rules | Where-Object { Get-PropertyValue $_ 'IncidentReportContent' }).Count
+    Add-Result -Product $Product -Category 'Data loss prevention' -Setting 'DLP incident reports' `
+        -Status (Get-CoverageState -Compliant $incidentReports -Total $ruleTotal) `
+        -Current ('Incident report configured on {0} of {1} rules' -f $incidentReports, $ruleTotal) `
+        -Expected 'Incident reports configured' `
+        -Recommendation 'Configure incident reports so DLP matches reach the SOC rather than sitting only in the Purview portal.'
 }
 
 function Test-PurviewRetention {
     <# Retention policies for both the classic and the newer (app) locations. #>
     param([string] $Product)
 
-    $policies = Invoke-Safely -Label 'Get-RetentionCompliancePolicy' -Script {
+    $call = Invoke-SafelyList -Label 'Get-RetentionCompliancePolicy' -Script {
         Get-RetentionCompliancePolicy -ErrorAction Stop
     }
 
-    if ($null -eq $policies) {
+    if (-not $call.Ok) {
         Add-Result -Product $Product -Category 'Data lifecycle' -Setting 'Retention policy inventory' `
-            -Status 'Gray' -Current 'Could not read retention policies' -Expected 'At least one enforced retention policy' `
-            -Recommendation 'Confirm the account holds a retention management read role.'
+            -Status 'Gray' -Current ('Request failed: {0}' -f $call.Error) -Expected 'At least one enforced retention policy' `
+            -Recommendation 'Confirm the account holds a retention management read role. Note that Purview reader-flavoured roles are often insufficient - Compliance Administrator or Retention Management is usually required.'
         return
     }
 
-    $total = @($policies).Count
+    $policies = $call.Items
+    $total    = $policies.Count
 
     if ($total -eq 0) {
         Add-Result -Product $Product -Category 'Data lifecycle' -Setting 'Retention policy inventory' `
@@ -3584,54 +3661,62 @@ function Test-PurviewRetention {
 
     # Newer locations (Teams private channels, Viva Engage, Copilot / AI app interactions)
     # use a separate cmdlet and are frequently missed entirely.
-    if (Test-CmdletAvailable -Name 'Get-AppRetentionCompliancePolicy') {
-        $appPolicies = Invoke-Safely -Label 'Get-AppRetentionCompliancePolicy' -Script {
-            Get-AppRetentionCompliancePolicy -ErrorAction Stop
-        }
+    if (-not (Test-CmdletAvailable -Name 'Get-AppRetentionCompliancePolicy')) { return }
 
-        if ($null -eq $appPolicies) {
-            Add-Result -Product $Product -Category 'Data lifecycle' -Setting 'Retention for newer locations' `
-                -Status 'Gray' -Current 'Could not read app retention policies' `
-                -Expected 'Coverage for Teams private channels, Viva Engage and Copilot/AI interactions' `
-                -Recommendation 'Verify retention read permissions.'
-        }
-        else {
-            $appTotal = @($appPolicies).Count
-
-            $appState = 'Yellow'
-            $appRec   = 'No app retention policies exist. Teams private channel messages, Viva Engage messages and Copilot/AI app interactions are retained by separate policies and are otherwise uncovered.'
-            if ($appTotal -gt 0) {
-                $appState = 'Green'
-                $appRec   = 'Confirm the covered locations match where your users actually work.'
-            }
-
-            Add-Result -Product $Product -Category 'Data lifecycle' -Setting 'Retention for newer locations' `
-                -Status $appState -Current ('{0} app retention policy(ies)' -f $appTotal) `
-                -Expected 'Coverage for Teams private channels, Viva Engage and Copilot/AI interactions' `
-                -Recommendation $appRec
-        }
+    $appCall = Invoke-SafelyList -Label 'Get-AppRetentionCompliancePolicy' -Script {
+        Get-AppRetentionCompliancePolicy -ErrorAction Stop
     }
+
+    if (-not $appCall.Ok) {
+        Add-Result -Product $Product -Category 'Data lifecycle' -Setting 'Retention for newer locations' `
+            -Status 'Gray' -Current ('Request failed: {0}' -f $appCall.Error) `
+            -Expected 'Coverage for Teams private channels, Viva Engage and Copilot/AI interactions' `
+            -Recommendation 'Verify retention read permissions.'
+        return
+    }
+
+    $appTotal = $appCall.Items.Count
+
+    $appState = 'Yellow'
+    $appRec   = 'No app retention policies exist. Teams private channel messages, Viva Engage messages and Copilot/AI app interactions are retained by separate policies and are otherwise uncovered.'
+    if ($appTotal -gt 0) {
+        $appState = 'Green'
+        $appRec   = 'Confirm the covered locations match where your users actually work.'
+    }
+
+    Add-Result -Product $Product -Category 'Data lifecycle' -Setting 'Retention for newer locations' `
+        -Status $appState -Current ('{0} app retention policy(ies)' -f $appTotal) `
+        -Expected 'Coverage for Teams private channels, Viva Engage and Copilot/AI interactions' `
+        -Recommendation $appRec
 }
+
 
 function Test-PurviewRetentionLabels {
     <# Retention label storage, label inventory and publication. #>
     param([string] $Product)
 
     if (Test-CmdletAvailable -Name 'Get-ComplianceTagStorage') {
-        $storage = Invoke-Safely -Label 'Get-ComplianceTagStorage' -Script { Get-ComplianceTagStorage -ErrorAction Stop }
-
-        $storageState   = 'Red'
-        $storageCurrent = 'Label storage not created'
-        if ($storage) {
-            $storageState   = 'Green'
-            $storageCurrent = 'Label storage present'
+        $storageCall = Invoke-SafelyList -Label 'Get-ComplianceTagStorage' -Script {
+            Get-ComplianceTagStorage -ErrorAction Stop
         }
 
-        Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention label storage created' `
-            -Status $storageState `
-            -Current $storageCurrent `
-            -Expected 'Label storage created' `
-            -Recommendation 'Run Enable-ComplianceTagStorage once. Retention labels cannot be used until this one-time storage exists.'
+        if (-not $storageCall.Ok) {
+            Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention label storage created' `
+                -Status 'Gray' -Current ('Request failed: {0}' -f $storageCall.Error) -Expected 'Label storage created' `
+                -Recommendation 'Verify retention read permissions.'
+        }
+        else {
+            $storageState   = 'Red'
+            $storageCurrent = 'Label storage not created'
+            if ($storageCall.Items.Count -gt 0) {
+                $storageState   = 'Green'
+                $storageCurrent = 'Label storage present'
+            }
+
+            Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention label storage created' `
+                -Status $storageState -Current $storageCurrent -Expected 'Label storage created' `
+                -Recommendation 'Run Enable-ComplianceTagStorage once. Retention labels cannot be used until this one-time storage exists.'
+        }
     }
 
     if (-not (Test-CmdletAvailable -Name 'Get-ComplianceTag')) {
@@ -3642,26 +3727,30 @@ function Test-PurviewRetentionLabels {
         return
     }
 
-    $labels = Invoke-Safely -Label 'Get-ComplianceTag' -Script { Get-ComplianceTag -ErrorAction Stop }
+    $call = Invoke-SafelyList -Label 'Get-ComplianceTag' -Script { Get-ComplianceTag -ErrorAction Stop }
 
-    if ($null -eq $labels) {
+    if (-not $call.Ok) {
         Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention label inventory' `
-            -Status 'Gray' -Current 'Could not read retention labels' -Expected 'Retention labels defined and published' `
+            -Status 'Gray' -Current ('Request failed: {0}' -f $call.Error) -Expected 'Retention labels defined and published' `
             -Recommendation 'Verify retention read permissions.'
         return
     }
 
-    $total = @($labels).Count
+    $labels = $call.Items
+    $total  = $labels.Count
 
-    $labelState = 'Red'
-    if ($total -gt 0) { $labelState = 'Green' }
+    if ($total -eq 0) {
+        Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention label inventory' `
+            -Status 'Red' -Current 'No retention labels defined' `
+            -Expected 'Retention labels defined for your record classes' `
+            -Recommendation 'Define retention labels for the record types your regulators care about, then publish or auto-apply them.'
+    }
+    else {
+        Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention label inventory' `
+            -Status 'Green' -Current ('{0} retention label(s) defined' -f $total) `
+            -Expected 'Retention labels defined for your record classes' `
+            -Recommendation 'Confirm the taxonomy covers the record types your regulators care about.'
 
-    Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention label inventory' `
-        -Status $labelState -Current ('{0} retention label(s) defined' -f $total) `
-        -Expected 'Retention labels defined for your record classes' `
-        -Recommendation 'Define retention labels for the record types your regulators care about, then publish or auto-apply them.'
-
-    if ($total -gt 0) {
         # Regulatory / record labels cannot be removed by users - worth calling out.
         $recordLabels = @($labels | Where-Object {
             (Get-PropertyValue $_ 'IsRecordLabel') -eq $true -or (Get-PropertyValue $_ 'RetentionAction') -eq 'KeepAndDelete'
@@ -3676,26 +3765,28 @@ function Test-PurviewRetentionLabels {
             -Recommendation 'Use record labels for content that must not be edited or deleted by users during its retention period.'
     }
 
-    if (Test-CmdletAvailable -Name 'Get-RetentionComplianceRule') {
-        $rules = Invoke-Safely -Label 'Get-RetentionComplianceRule' -Script { Get-RetentionComplianceRule -ErrorAction Stop }
+    if (-not (Test-CmdletAvailable -Name 'Get-RetentionComplianceRule')) { return }
 
-        if ($null -eq $rules) {
-            Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention rules defined' `
-                -Status 'Gray' -Current 'Could not read retention rules' -Expected 'Every policy backed by a rule' `
-                -Recommendation 'Verify retention read permissions.'
-        }
-        else {
-            $ruleCount = @($rules).Count
-
-            $ruleState = 'Red'
-            if ($ruleCount -gt 0) { $ruleState = 'Green' }
-
-            Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention rules defined' `
-                -Status $ruleState -Current ('{0} retention rule(s)' -f $ruleCount) `
-                -Expected 'Every retention policy backed by a rule' `
-                -Recommendation 'A retention policy needs a rule to define the actual retain/delete settings. A policy with no rule is incomplete.'
-        }
+    $ruleCall = Invoke-SafelyList -Label 'Get-RetentionComplianceRule' -Script {
+        Get-RetentionComplianceRule -ErrorAction Stop
     }
+
+    if (-not $ruleCall.Ok) {
+        Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention rules defined' `
+            -Status 'Gray' -Current ('Request failed: {0}' -f $ruleCall.Error) -Expected 'Every policy backed by a rule' `
+            -Recommendation 'Verify retention read permissions.'
+        return
+    }
+
+    $ruleCount = $ruleCall.Items.Count
+
+    $ruleState = 'Red'
+    if ($ruleCount -gt 0) { $ruleState = 'Green' }
+
+    Add-Result -Product $Product -Category 'Retention labels' -Setting 'Retention rules defined' `
+        -Status $ruleState -Current ('{0} retention rule(s)' -f $ruleCount) `
+        -Expected 'Every retention policy backed by a rule' `
+        -Recommendation 'A retention policy needs a rule to define the actual retain/delete settings. A policy with no rule is incomplete.'
 }
 
 function Test-PurviewSensitivityLabels {
@@ -3710,16 +3801,17 @@ function Test-PurviewSensitivityLabels {
         return
     }
 
-    $labels = Invoke-Safely -Label 'Get-Label' -Script { Get-Label -ErrorAction Stop }
+    $call = Invoke-SafelyList -Label 'Get-Label' -Script { Get-Label -ErrorAction Stop }
 
-    if ($null -eq $labels) {
+    if (-not $call.Ok) {
         Add-Result -Product $Product -Category 'Information protection' -Setting 'Sensitivity label inventory' `
-            -Status 'Gray' -Current 'Could not read sensitivity labels' -Expected 'Sensitivity labels defined and published' `
+            -Status 'Gray' -Current ('Request failed: {0}' -f $call.Error) -Expected 'Sensitivity labels defined and published' `
             -Recommendation 'Verify information protection read permissions.'
         return
     }
 
-    $total = @($labels).Count
+    $labels = $call.Items
+    $total  = $labels.Count
 
     if ($total -eq 0) {
         Add-Result -Product $Product -Category 'Information protection' -Setting 'Sensitivity label inventory' `
@@ -3780,89 +3872,100 @@ function Test-PurviewSensitivityLabels {
         -Recommendation 'Manual-only labelling depends entirely on user diligence. Add auto-labelling conditions for your key sensitive info types.'
 
     # Label policies are what actually publish labels to users.
-    if (Test-CmdletAvailable -Name 'Get-LabelPolicy') {
-        $labelPolicies = Invoke-Safely -Label 'Get-LabelPolicy' -Script { Get-LabelPolicy -ErrorAction Stop }
+    if (-not (Test-CmdletAvailable -Name 'Get-LabelPolicy')) { return }
 
-        if ($null -eq $labelPolicies) {
-            Add-Result -Product $Product -Category 'Information protection' -Setting 'Sensitivity label publication' `
-                -Status 'Gray' -Current 'Could not read label policies' -Expected 'At least one label policy published' `
-                -Recommendation 'Verify information protection read permissions.'
-            return
-        }
+    $policyCall = Invoke-SafelyList -Label 'Get-LabelPolicy' -Script { Get-LabelPolicy -ErrorAction Stop }
 
-        $policyTotal = @($labelPolicies).Count
-
-        $publishState = 'Red'
-        if ($policyTotal -gt 0) { $publishState = 'Green' }
-
+    if (-not $policyCall.Ok) {
         Add-Result -Product $Product -Category 'Information protection' -Setting 'Sensitivity label publication' `
-            -Status $publishState -Current ('{0} label policy(ies) published' -f $policyTotal) `
-            -Expected 'At least one label policy published to users' `
-            -Recommendation 'Labels that are never published are invisible to users. Publish them to the relevant groups.'
-
-        if ($policyTotal -gt 0) {
-            # Mandatory labelling and a default label sharply raise coverage.
-            $mandatory = @($labelPolicies | Where-Object {
-                "$(Get-PropertyValue $_ 'Settings')" -match '(?i)mandatory.*true'
-            }).Count
-
-            $mandatoryState = 'Yellow'
-            if ($mandatory -gt 0) { $mandatoryState = 'Green' }
-
-            Add-Result -Product $Product -Category 'Information protection' -Setting 'Mandatory labelling' `
-                -Status $mandatoryState -Current ('Mandatory labelling detected in {0} of {1} policies' -f $mandatory, $policyTotal) `
-                -Expected 'Mandatory labelling enabled' `
-                -Recommendation 'Requiring a label on save or send is the single biggest driver of labelling coverage. Enable it once your taxonomy is stable.'
-
-            $defaultLabel = @($labelPolicies | Where-Object {
-                "$(Get-PropertyValue $_ 'Settings')" -match '(?i)defaultlabelid'
-            }).Count
-
-            $defaultState = 'Yellow'
-            if ($defaultLabel -gt 0) { $defaultState = 'Green' }
-
-            Add-Result -Product $Product -Category 'Information protection' -Setting 'Default label configured' `
-                -Status $defaultState -Current ('Default label set in {0} of {1} policies' -f $defaultLabel, $policyTotal) `
-                -Expected 'Default label configured' `
-                -Recommendation 'A default label ensures new content starts classified rather than unlabelled.'
-        }
+            -Status 'Gray' -Current ('Request failed: {0}' -f $policyCall.Error) -Expected 'At least one label policy published' `
+            -Recommendation 'Verify information protection read permissions.'
+        return
     }
+
+    $labelPolicies = $policyCall.Items
+    $policyTotal   = $labelPolicies.Count
+
+    $publishState = 'Red'
+    if ($policyTotal -gt 0) { $publishState = 'Green' }
+
+    Add-Result -Product $Product -Category 'Information protection' -Setting 'Sensitivity label publication' `
+        -Status $publishState -Current ('{0} label policy(ies) published' -f $policyTotal) `
+        -Expected 'At least one label policy published to users' `
+        -Recommendation 'Labels that are never published are invisible to users. Publish them to the relevant groups.'
+
+    if ($policyTotal -eq 0) { return }
+
+    # Mandatory labelling and a default label sharply raise coverage.
+    $mandatory = @($labelPolicies | Where-Object {
+        "$(Get-PropertyValue $_ 'Settings')" -match '(?i)mandatory.*true'
+    }).Count
+
+    $mandatoryState = 'Yellow'
+    if ($mandatory -gt 0) { $mandatoryState = 'Green' }
+
+    Add-Result -Product $Product -Category 'Information protection' -Setting 'Mandatory labelling' `
+        -Status $mandatoryState -Current ('Mandatory labelling detected in {0} of {1} policies' -f $mandatory, $policyTotal) `
+        -Expected 'Mandatory labelling enabled' `
+        -Recommendation 'Requiring a label on save or send is the single biggest driver of labelling coverage. Enable it once your taxonomy is stable.'
+
+    $defaultLabel = @($labelPolicies | Where-Object {
+        "$(Get-PropertyValue $_ 'Settings')" -match '(?i)defaultlabelid'
+    }).Count
+
+    $defaultState = 'Yellow'
+    if ($defaultLabel -gt 0) { $defaultState = 'Green' }
+
+    Add-Result -Product $Product -Category 'Information protection' -Setting 'Default label configured' `
+        -Status $defaultState -Current ('Default label set in {0} of {1} policies' -f $defaultLabel, $policyTotal) `
+        -Expected 'Default label configured' `
+        -Recommendation 'A default label ensures new content starts classified rather than unlabelled.'
 }
 
 function Test-PurviewInsiderRisk {
     <#
-        Insider Risk Management and Communication Compliance. Both are E5 / add-on
-        features and their cmdlets are frequently absent, so each is gated on cmdlet
-        availability and reports Gray rather than a misleading Red when unavailable.
+        Insider Risk Management and Communication Compliance.
+
+        Both are E5 / add-on features with their OWN Purview role groups - being
+        an Entra Compliance Administrator is not the same as holding the Insider
+        Risk Management or Communication Compliance role group, and the Entra
+        role does not populate the Purview role group.
+
+        Three distinct outcomes are reported here:
+          cmdlet absent   -> Gray  (licensing or role group, not a misconfig)
+          call failed     -> Gray  (with the real error text)
+          zero policies   -> Red / Yellow (genuinely not configured)
     #>
     param([string] $Product)
 
     # ---- Insider Risk Management ----
-    if (Test-CmdletAvailable -Name 'Get-InsiderRiskPolicy') {
-        $irmPolicies = Invoke-Safely -Label 'Get-InsiderRiskPolicy' -Script { Get-InsiderRiskPolicy -ErrorAction Stop }
+    if (-not (Test-CmdletAvailable -Name 'Get-InsiderRiskPolicy')) {
+        Add-Result -Product $Product -Category 'Insider risk' -Setting 'Insider risk policies' `
+            -Status 'Gray' -Current 'Insider risk cmdlets not available in this session' `
+            -Expected 'At least one enabled policy' `
+            -Recommendation 'Insider Risk Management requires E5 or the Compliance add-on, plus membership of the Insider Risk Management or Insider Risk Management Admins role group in Purview. The Entra Compliance Administrator role alone does not grant this.'
+    }
+    else {
+        $irmCall = Invoke-SafelyList -Label 'Get-InsiderRiskPolicy' -Script {
+            Get-InsiderRiskPolicy -ErrorAction Stop
+        }
 
-        if ($null -eq $irmPolicies) {
+        if (-not $irmCall.Ok) {
             Add-Result -Product $Product -Category 'Insider risk' -Setting 'Insider risk policies' `
-                -Status 'Gray' -Current 'Could not read insider risk policies' -Expected 'At least one enabled policy' `
-                -Recommendation 'Confirm the account holds an Insider Risk Management role.'
+                -Status 'Gray' -Current ('Request failed: {0}' -f $irmCall.Error) -Expected 'At least one enabled policy' `
+                -Recommendation 'Add the account to the Insider Risk Management or Insider Risk Management Admins role group in Purview > Settings > Roles & scopes. Role group changes can take up to 30 minutes to apply.'
         }
         else {
-            $irmTotal = @($irmPolicies).Count
+            $irmTotal = $irmCall.Items.Count
 
             $irmState = 'Red'
             if ($irmTotal -gt 0) { $irmState = 'Green' }
 
             Add-Result -Product $Product -Category 'Insider risk' -Setting 'Insider risk policies' `
-                -Status $irmState -Current ('{0} insider risk policy(ies)' -f $irmTotal) `
+                -Status $irmState -Current ('{0} insider risk policy(ies) configured' -f $irmTotal) `
                 -Expected 'At least one enabled policy' `
                 -Recommendation 'Create insider risk policies for departing-employee data theft and sensitive data leak scenarios - the two highest-value starting templates.'
         }
-    }
-    else {
-        Add-Result -Product $Product -Category 'Insider risk' -Setting 'Insider risk policies' `
-            -Status 'Gray' -Current 'Insider risk cmdlets not available in this session' `
-            -Expected 'At least one enabled policy' `
-            -Recommendation 'Insider Risk Management requires E5 or the Compliance add-on plus an Insider Risk Management role. Review in the Purview portal.'
     }
 
     # ---- Communication Compliance ----
@@ -3870,35 +3973,33 @@ function Test-PurviewInsiderRisk {
                     Where-Object { Test-CmdletAvailable -Name $_ } |
                     Select-Object -First 1
 
-    if ($ccCmdlet) {
-        $ccPolicies = Invoke-Safely -Label $ccCmdlet -Script {
-            & $ccCmdlet -ErrorAction Stop
-        }
-
-        if ($null -eq $ccPolicies) {
-            Add-Result -Product $Product -Category 'Communication compliance' -Setting 'Communication compliance policies' `
-                -Status 'Gray' -Current 'Could not read communication compliance policies' `
-                -Expected 'At least one active policy' `
-                -Recommendation 'Confirm the account holds a Communication Compliance role.'
-        }
-        else {
-            $ccTotal = @($ccPolicies).Count
-
-            $ccState = 'Yellow'
-            if ($ccTotal -gt 0) { $ccState = 'Green' }
-
-            Add-Result -Product $Product -Category 'Communication compliance' -Setting 'Communication compliance policies' `
-                -Status $ccState -Current ('{0} policy(ies) configured' -f $ccTotal) `
-                -Expected 'At least one active policy' `
-                -Recommendation 'Communication compliance policies detect harassment, regulatory breaches and sensitive info sharing in Teams and email.'
-        }
-    }
-    else {
+    if (-not $ccCmdlet) {
         Add-Result -Product $Product -Category 'Communication compliance' -Setting 'Communication compliance policies' `
             -Status 'Gray' -Current 'Communication compliance cmdlets not available in this session' `
             -Expected 'At least one active policy' `
-            -Recommendation 'Communication Compliance requires E5 or the Compliance add-on plus the relevant role. Review in the Purview portal.'
+            -Recommendation 'Communication Compliance requires E5 or the Compliance add-on, plus membership of the Communication Compliance role group in Purview.'
+        return
     }
+
+    $ccCall = Invoke-SafelyList -Label $ccCmdlet -Script { & $ccCmdlet -ErrorAction Stop }
+
+    if (-not $ccCall.Ok) {
+        Add-Result -Product $Product -Category 'Communication compliance' -Setting 'Communication compliance policies' `
+            -Status 'Gray' -Current ('Request failed: {0}' -f $ccCall.Error) `
+            -Expected 'At least one active policy' `
+            -Recommendation 'Add the account to the Communication Compliance role group in Purview > Settings > Roles & scopes. Role group changes can take up to 30 minutes to apply.'
+        return
+    }
+
+    $ccTotal = $ccCall.Items.Count
+
+    $ccState = 'Yellow'
+    if ($ccTotal -gt 0) { $ccState = 'Green' }
+
+    Add-Result -Product $Product -Category 'Communication compliance' -Setting 'Communication compliance policies' `
+        -Status $ccState -Current ('{0} policy(ies) configured' -f $ccTotal) `
+        -Expected 'At least one active policy' `
+        -Recommendation 'Communication compliance policies detect harassment, regulatory breaches and sensitive info sharing in Teams and email.'
 }
 
 #endregion
