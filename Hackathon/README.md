@@ -20,21 +20,6 @@ Read-only best-practice assessment across **seven Microsoft security and complia
 
 ---
 
-Microsoft Graph delegated scopes
-These are the exact scopes requested by `Connect-MgGraph` in the script. All are `.Read` — none write.
-Scope	What the script reads with it	Required by `-Modules`
-`Policy.Read.All`	Security defaults, Conditional Access policies, authorization policy, admin consent request policy	`Entra`, `DefenderForCloudApps`
-`Policy.Read.AuthenticationMethod`	Authentication methods policy, registration campaign, migration state	`Entra`
-`RoleManagement.Read.Directory`	Directory role definitions, role assignments, PIM eligibility schedules	`Entra`
-`Directory.Read.All`	Directory objects backing the role and policy checks	`Entra`
-`DeviceManagementConfiguration.Read.All`	Intune settings-catalog policies (Defender AV settings, ASR rules)	`DefenderForEndpoint`
-`DeviceManagementManagedDevices.Read.All`	Managed device inventory	`DefenderForEndpoint`
-`SecurityIdentitiesSensors.Read.All`	Defender for Identity sensor inventory, version, health, service state	`DefenderForIdentity`
-`SecurityIdentitiesHealth.Read.All`	Defender for Identity open health issues	`DefenderForIdentity`
-`CloudApp-Discovery.Read.All`	Defender for Cloud Apps Cloud Discovery uploaded streams	`DefenderForCloudApps`
-
----
-
 ## How results are graded
 
 | State | Meaning |
