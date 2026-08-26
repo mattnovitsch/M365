@@ -235,6 +235,155 @@ Providing all redirect URIs improves compatibility and reduces authentication fa
 
 ---
 
+# Microsoft Defender for Cloud Apps (MDA) API Token
+
+The Defender for Cloud Apps assessment requires an API token and portal URL to retrieve Microsoft Defender for Cloud Apps configuration and Cloud Discovery data.
+
+## Create an API Token
+
+1. Open Microsoft Defender XDR.
+2. Navigate to:
+
+```text
+Settings
+ └─ Cloud Apps
+     └─ System
+         └─ API Tokens
+```
+
+3. Select:
+
+```text
++ Create token
+```
+
+4. Enter a descriptive name.
+
+Example:
+
+```text
+AIReadinessReport
+```
+
+5. Select **Create**.
+
+6. Copy the generated token and store it securely.
+
+> **Important:** The token value is only displayed once. Store it in a password vault or other secure location before closing the window.
+
+---
+
+## Obtain the Portal URL
+
+The portal URL is unique to each tenant.
+
+Examples:
+
+Commercial:
+
+```text
+https://contoso.portal.cloudappsecurity.com
+```
+
+GCC:
+
+```text
+https://contoso.us.portal.cloudappsecurity.com
+```
+
+You can obtain the portal URL from the browser address bar while connected to Microsoft Defender for Cloud Apps.
+
+---
+
+## Example Usage
+
+```powershell
+.\Invoke-DefenderBestPracticeReport.ps1 `
+    -Modules DefenderForCloudApps `
+    -MdaPortalUrl "https://contoso.portal.cloudappsecurity.com" `
+    -MdaApiToken "<API Token>"
+```
+
+Combined example:
+
+```powershell
+.\Invoke-DefenderBestPracticeReport.ps1 `
+    -Modules Entra,DefenderForOffice,Purview,DefenderForCloudApps `
+    -GraphClientId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+    -MdaPortalUrl "https://contoso.portal.cloudappsecurity.com" `
+    -MdaApiToken "<API Token>"
+```
+
+---
+
+## Security Recommendations
+
+- Treat the API token as a password.
+- Do not commit tokens to GitHub or source control.
+- Do not embed tokens in scripts that are shared with others.
+- Store tokens in a secure vault whenever possible.
+- Revoke and recreate tokens if they are suspected to be compromised.
+
+If an invalid or missing token is supplied, Defender for Cloud Apps checks will be reported as **Gray** because the workload cannot be assessed.
+---
+
+## Obtain the MDA Portal URL
+
+The portal URL is unique to each tenant.
+
+Examples:
+
+Commercial:
+
+```text
+https://contoso.portal.cloudappsecurity.com
+```
+
+US Government:
+
+```text
+https://contoso.us.portal.cloudappsecurity.com
+```
+
+You can obtain the URL from your browser address bar while logged into Microsoft Defender for Cloud Apps.
+
+---
+
+## Running Defender for Cloud Apps Assessments
+
+Example:
+
+```powershell
+.\Invoke-DefenderBestPracticeReport.ps1 `
+    -Modules DefenderForCloudApps `
+    -MdaPortalUrl "https://contoso.portal.cloudappsecurity.com" `
+    -MdaApiToken "<API Token>"
+```
+
+Example with additional workloads:
+
+```powershell
+.\Invoke-DefenderBestPracticeReport.ps1 `
+    -Modules Entra,DefenderForOffice,Purview,DefenderForCloudApps `
+    -MdaPortalUrl "https://contoso.portal.cloudappsecurity.com" `
+    -MdaApiToken "<API Token>" `
+    -GraphClientId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```
+
+---
+
+## Security Considerations
+
+- Treat the API token like a password.
+- Do not store tokens in source control repositories.
+- Do not embed tokens directly into scripts.
+- Rotate tokens regularly according to your organization's security policies.
+- Revoke unused or compromised tokens immediately.
+
+If the token is invalid or missing, Microsoft Defender for Cloud Apps checks will be reported as **Gray** because the workload cannot be assessed.
+
+---
+
 # Required Microsoft Graph Permissions
 
 Add the following Delegated Microsoft Graph permissions.
