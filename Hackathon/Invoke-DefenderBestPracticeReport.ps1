@@ -4005,9 +4005,62 @@ function Test-PurviewInsiderRisk {
 #endregion
 
 # =====================================================================================
-# REGION: HTML report generation
+# REGION: HTML report generation  -- REPLACEMENT
 # =====================================================================================
+#
+#   HOW TO APPLY
+#   ------------
+#   In Invoke-DefenderBestPracticeReport.ps1, find:
+#
+#       # =====================================================================================
+#       # REGION: HTML report generation
+#       # =====================================================================================
+#       #region Reporting
+#
+#   ...and delete everything from that line down to and including the matching
+#
+#       #endregion
+#
+#   (it sits immediately before "# REGION: MAIN"). Paste this file's contents in
+#   its place. Nothing else in the script changes - Add-Result, the check
+#   functions and MAIN are all untouched.
+#
+#
+#   WHAT CHANGED vs. the original New-HtmlReport
+#   --------------------------------------------
+#   1. Product dropdown added to the .controls bar, built from the products that
+#      actually produced results in this run. Add an eighth workload later and it
+#      appears in the list automatically - no HTML edits needed.
+#
+#   2. Each product's <h2> + <table> is now wrapped in
+#         <div class="product-section" data-product="...">
+#      so selecting a product hides the whole section, heading included, rather
+#      than leaving an empty table behind.
+#
+#   3. Every <tr> now carries data-product alongside the existing data-status.
+#
+#   4. applyFilters() ANDs all three filters together - product AND status AND
+#      search text - and hides any section left with zero visible rows.
+#
+#   5. Added a live match counter, a "no matches" message, and a Reset button.
+#
+#   The status buttons, theme toggle, print styles and colour palette are
+#   unchanged.
+# =====================================================================================
+
 #region Reporting
+
+function ConvertTo-ProductSlug {
+    <#
+        Turns a product display name into an HTML-attribute-safe token.
+        "Defender for Office 365" -> "DefenderforOffice365"
+        Used as the value for the product filter and the data-product attribute.
+    #>
+    param([string] $Product)
+
+    if ([string]::IsNullOrWhiteSpace($Product)) { return 'Unknown' }
+    return ($Product -replace '[^A-Za-z0-9]', '')
+}
 
 function New-HtmlReport {
     <#
@@ -4019,6 +4072,12 @@ function New-HtmlReport {
         system-preferred) theme BEFORE the body paints, so the report never flashes
         white and then snaps to dark. The choice persists in localStorage, and printing
         always forces the light palette regardless of the on-screen theme.
+
+        FILTERING: three independent filters combine with AND -
+            product  (dropdown, built from the results in this run)
+            status   (All / Green / Yellow / Red / Gray buttons)
+            search   (free text across the whole row)
+        Product sections with no surviving rows are hidden entirely.
     #>
     param(
         [Parameter(Mandatory)][object[]] $Data,
@@ -4029,8 +4088,8 @@ function New-HtmlReport {
     $yellow = @($Data | Where-Object Status -eq 'Yellow').Count
     $red    = @($Data | Where-Object Status -eq 'Red').Count
     $gray   = @($Data | Where-Object Status -eq 'Gray').Count
-    $scored = $green + $yellow + $red
 
+    $scored = $green + $yellow + $red
     $scorePercent = 0
     if ($scored -gt 0) {
         $scorePercent = [math]::Round(((($green * $script:StateWeight.Green) + ($yellow * $script:StateWeight.Yellow)) / ($scored * $script:StateWeight.Green)) * 100, 1)
@@ -4094,6 +4153,8 @@ function New-HtmlReport {
   .card.score .n.ok { color:var(--green); }
   .card.score .n.warn { color:var(--yellow); }
   .card.score .n.bad { color:var(--red); }
+  .card.clickable { cursor:pointer; }
+  .card.clickable:hover { border-color:var(--accent); }
   .bar { display:flex; height:12px; border-radius:6px; overflow:hidden; margin:4px 0 24px; border:1px solid var(--line); }
   .bar span { display:block; height:100%; }
   .bar .g { background:var(--green); } .bar .y { background:#ffb900; }
@@ -4101,10 +4162,16 @@ function New-HtmlReport {
   .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:20px; }
   .controls input { padding:8px 12px; border:1px solid var(--line); border-radius:6px;
                     min-width:280px; font-size:14px; background:var(--card); color:var(--ink); }
+  .controls select { padding:8px 12px; border:1px solid var(--line); border-radius:6px;
+                     font-size:14px; background:var(--card); color:var(--ink); min-width:230px; }
+  .controls label { font-size:13px; color:var(--muted); }
   .btn { cursor:pointer; border:1px solid var(--line); background:var(--card); border-radius:16px;
          padding:6px 14px; font-size:13px; color:var(--ink); }
   .btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
   .theme-toggle { margin-left:auto; display:inline-flex; align-items:center; gap:7px; }
+  .count { font-size:12.5px; color:var(--muted); }
+  .noresults { display:none; background:var(--card); border:1px solid var(--line);
+               border-radius:8px; padding:28px; text-align:center; color:var(--muted); }
   h2 { font-size:18px; margin:30px 0 4px; padding-bottom:8px; border-bottom:2px solid var(--line); }
   h2 .pill { font-size:12px; font-weight:400; color:var(--muted); margin-left:10px; }
   table { width:100%; border-collapse:collapse; background:var(--card);
@@ -4130,6 +4197,9 @@ function New-HtmlReport {
   .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); margin-bottom:18px; }
   @media print {
     .controls { display:none; }
+    /* Print every product section regardless of the on-screen filter. */
+    .product-section { display:block !important; }
+    .product-section tbody tr { display:table-row !important; }
     /* Always print on white, whatever the on-screen theme is. */
     html, body, [data-theme="dark"] {
       --ink:#1b1b1b; --muted:#616161; --line:#e1e1e1; --card:#ffffff; --page:#ffffff;
@@ -4158,6 +4228,7 @@ function New-HtmlReport {
 </head>
 <body>
 '@
+
     [void]$sb.Append($head)
 
     # ---- Header and summary ----
@@ -4171,10 +4242,10 @@ function New-HtmlReport {
 <div class="wrap">
   <div class="cards">
     <div class="card score"><div class="n $scoreClass">$scorePercent%</div><div class="l">Weighted score</div></div>
-    <div class="card g"><div class="n">$green</div><div class="l">Green - compliant</div></div>
-    <div class="card y"><div class="n">$yellow</div><div class="l">Yellow - partial</div></div>
-    <div class="card r"><div class="n">$red</div><div class="l">Red - not configured</div></div>
-    <div class="card x"><div class="n">$gray</div><div class="l">Gray - not evaluated</div></div>
+    <div class="card g clickable" onclick="filterByStatus('Green')"><div class="n">$green</div><div class="l">Green - compliant</div></div>
+    <div class="card y clickable" onclick="filterByStatus('Yellow')"><div class="n">$yellow</div><div class="l">Yellow - partial</div></div>
+    <div class="card r clickable" onclick="filterByStatus('Red')"><div class="n">$red</div><div class="l">Red - not configured</div></div>
+    <div class="card x clickable" onclick="filterByStatus('Gray')"><div class="n">$gray</div><div class="l">Gray - not evaluated</div></div>
   </div>
 "@)
 
@@ -4194,37 +4265,70 @@ function New-HtmlReport {
     <span><strong>Red</strong> - off, missing, or not configured</span>
     <span><strong>Gray</strong> - could not be evaluated (permissions, module, licensing, or workload skipped)</span>
   </div>
-  <div class="controls">
-    <input type="text" id="q" placeholder="Filter by setting, category or recommendation..." oninput="applyFilters()" />
-    <button class="btn active" data-f="All" onclick="setFilter(this)">All</button>
-    <button class="btn" data-f="Green" onclick="setFilter(this)">Green</button>
-    <button class="btn" data-f="Yellow" onclick="setFilter(this)">Yellow</button>
-    <button class="btn" data-f="Red" onclick="setFilter(this)">Red</button>
-    <button class="btn" data-f="Gray" onclick="setFilter(this)">Gray</button>
-    <button class="btn theme-toggle" id="themeBtn" onclick="toggleTheme()" title="Switch between light and dark">
-      <span id="themeIcon">&#9789;</span><span id="themeLabel">Dark</span>
-    </button>
-  </div>
 '@)
 
-    # ---- Per-product tables ----
+    # ---- Product ordering ----
+    # Canonical order first, then anything unexpected appended so a new workload
+    # is never silently dropped from the report or the filter.
     $productOrder = @(
         'Microsoft Entra ID', 'Defender for Cloud', 'Defender for Endpoint',
         'Defender for Identity', 'Defender for Office 365', 'Defender for Cloud Apps',
         'Microsoft Purview'
     )
+
     $present = $Data | Select-Object -ExpandProperty Product -Unique
     $ordered = @($productOrder | Where-Object { $present -contains $_ }) +
                @($present | Where-Object { $productOrder -notcontains $_ })
 
+    # ---- Product filter options, built from what actually ran ----
+    $productOptions = "      <option value=`"All`">All products</option>`r`n"
+
     foreach ($product in $ordered) {
+        $slug  = ConvertTo-ProductSlug $product
+        $count = @($Data | Where-Object Product -eq $product).Count
+        $safe  = ConvertTo-HtmlSafe $product
+        $productOptions += "      <option value=`"$slug`">$safe ($count)</option>`r`n"
+    }
+
+    # ---- Controls bar ----
+    [void]$sb.Append(@"
+  <div class="controls">
+    <label for="productFilter">Product:</label>
+    <select id="productFilter" onchange="applyFilters()">
+$productOptions    </select>
+
+    <input type="text" id="q" placeholder="Filter by setting, category or recommendation..." oninput="applyFilters()" />
+
+    <button class="btn active" data-f="All" onclick="setFilter(this)">All</button>
+    <button class="btn" data-f="Green" onclick="setFilter(this)">Green</button>
+    <button class="btn" data-f="Yellow" onclick="setFilter(this)">Yellow</button>
+    <button class="btn" data-f="Red" onclick="setFilter(this)">Red</button>
+    <button class="btn" data-f="Gray" onclick="setFilter(this)">Gray</button>
+
+    <button class="btn" onclick="resetFilters()">Reset</button>
+    <span class="count" id="matchCount"></span>
+
+    <button class="btn theme-toggle" id="themeBtn" onclick="toggleTheme()" title="Switch between light and dark">
+      <span id="themeIcon">&#9789;</span><span id="themeLabel">Dark</span>
+    </button>
+  </div>
+"@)
+
+    # ---- Per-product sections ----
+    foreach ($product in $ordered) {
+
         $rows = @($Data | Where-Object Product -eq $product)
+
         $pg = @($rows | Where-Object Status -eq 'Green').Count
         $py = @($rows | Where-Object Status -eq 'Yellow').Count
         $pr = @($rows | Where-Object Status -eq 'Red').Count
         $px = @($rows | Where-Object Status -eq 'Gray').Count
 
         $productSafe = ConvertTo-HtmlSafe $product
+        $slug        = ConvertTo-ProductSlug $product
+
+        # Wrapper so the heading disappears with the table when filtered out.
+        [void]$sb.Append("<div class=`"product-section`" data-product=`"$slug`">")
 
         [void]$sb.Append("<h2>$productSafe<span class=`"pill`">$($rows.Count) checks &middot; $pg green &middot; $py yellow &middot; $pr red &middot; $px gray</span></h2>")
         [void]$sb.Append('<table><thead><tr><th style="width:22%">Setting</th><th style="width:12%">Category</th><th style="width:9%">Status</th><th style="width:19%">Current value</th><th style="width:13%">Expected</th><th style="width:25%">Recommendation</th></tr></thead><tbody>')
@@ -4233,6 +4337,7 @@ function New-HtmlReport {
         $sorted = $rows | Sort-Object @{ Expression = { $sortRank[$_.Status] } }, Category, Setting
 
         foreach ($row in $sorted) {
+
             $setting = ConvertTo-HtmlSafe $row.Setting
             if ($row.Scope) {
                 $scopeSafe = ConvertTo-HtmlSafe $row.Scope
@@ -4244,13 +4349,19 @@ function New-HtmlReport {
             $expText = ConvertTo-HtmlSafe $row.Expected
             $recText = ConvertTo-HtmlSafe $row.Recommendation
 
-            $template = "<tr class=`"{0}`" data-status=`"{0}`"><td>{1}</td><td class=`"cat`">{2}</td><td><span class=`"st {0}`">{0}</span></td><td class=`"cur`">{3}</td><td class=`"cur`">{4}</td><td class=`"rec`">{5}</td></tr>"
-            [void]$sb.Append(($template -f $row.Status, $setting, $catText, $curText, $expText, $recText))
+            # {0} status  {1} setting  {2} category  {3} current
+            # {4} expected  {5} recommendation  {6} product slug
+            $template = "<tr class=`"{0}`" data-status=`"{0}`" data-product=`"{6}`"><td>{1}</td><td class=`"cat`">{2}</td><td><span class=`"st {0}`">{0}</span></td><td class=`"cur`">{3}</td><td class=`"cur`">{4}</td><td class=`"rec`">{5}</td></tr>"
+
+            [void]$sb.Append(($template -f $row.Status, $setting, $catText, $curText, $expText, $recText, $slug))
         }
+
         [void]$sb.Append('</tbody></table>')
+        [void]$sb.Append('</div>')
     }
 
     [void]$sb.Append(@"
+  <div class="noresults" id="noResults">No checks match the current filters.</div>
   <footer>Generated by Invoke-DefenderBestPracticeReport.ps1 &middot; $generated &middot; Read-only assessment - no tenant changes were made.</footer>
 </div>
 <script>
@@ -4258,19 +4369,56 @@ var currentFilter = 'All';
 
 function setFilter(btn) {
   currentFilter = btn.getAttribute('data-f');
-  // Scope to status buttons only, so the theme toggle keeps its own styling.
+  // Scope to status buttons only, so Reset and the theme toggle keep their own styling.
   document.querySelectorAll('.btn[data-f]').forEach(function (b) { b.classList.remove('active'); });
   btn.classList.add('active');
   applyFilters();
 }
 
+// Lets the summary cards drive the status filter, keeping the button row in sync.
+function filterByStatus(status) {
+  var btn = document.querySelector('.btn[data-f="' + status + '"]');
+  if (btn) { setFilter(btn); }
+}
+
 function applyFilters() {
   var term = document.getElementById('q').value.toLowerCase();
-  document.querySelectorAll('tbody tr').forEach(function (tr) {
-    var statusOk = (currentFilter === 'All') || (tr.getAttribute('data-status') === currentFilter);
-    var textOk = (term === '') || (tr.innerText.toLowerCase().indexOf(term) !== -1);
-    tr.style.display = (statusOk && textOk) ? '' : 'none';
+  var productFilter = document.getElementById('productFilter').value;
+  var totalVisible = 0;
+  var totalRows = 0;
+
+  document.querySelectorAll('.product-section').forEach(function (section) {
+
+    var sectionProduct = section.getAttribute('data-product');
+    var productOk = (productFilter === 'All') || (sectionProduct === productFilter);
+    var shown = 0;
+
+    section.querySelectorAll('tbody tr').forEach(function (tr) {
+
+      totalRows++;
+
+      var statusOk = (currentFilter === 'All') || (tr.getAttribute('data-status') === currentFilter);
+      var textOk = (term === '') || (tr.innerText.toLowerCase().indexOf(term) !== -1);
+      var ok = productOk && statusOk && textOk;
+
+      tr.style.display = ok ? '' : 'none';
+      if (ok) { shown++; }
+    });
+
+    // Hide the heading too when nothing in this product survives the filters.
+    section.style.display = (shown > 0) ? '' : 'none';
+    totalVisible += shown;
   });
+
+  document.getElementById('matchCount').textContent = totalVisible + ' of ' + totalRows + ' checks shown';
+  document.getElementById('noResults').style.display = (totalVisible === 0) ? 'block' : 'none';
+}
+
+function resetFilters() {
+  document.getElementById('productFilter').value = 'All';
+  document.getElementById('q').value = '';
+  var allBtn = document.querySelector('.btn[data-f="All"]');
+  if (allBtn) { setFilter(allBtn); } else { currentFilter = 'All'; applyFilters(); }
 }
 
 function applyThemeLabel(theme) {
@@ -4294,6 +4442,7 @@ function toggleTheme() {
 }
 
 applyThemeLabel(document.documentElement.getAttribute('data-theme') || 'light');
+applyFilters();
 </script>
 </body>
 </html>
