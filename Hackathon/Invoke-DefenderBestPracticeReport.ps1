@@ -59,7 +59,8 @@
 
 .PARAMETER TenantId
     Entra tenant ID. Optional; used for Graph / Az sign-in and stamped on the report.
-
+.PARAMETER GraphClientId 
+    Client ID of a customer-owned Entra app registration to use for the Microsoft Graph sign-in. Optional. When omitted, the first-party Microsoft Graph Command Line Tools app is used and the required scopes are requested dynamically at sign-in - which means the portal's "Grant admin consent" button cannot pre-approve them. A custom registration has the scopes statically configured, so an administrator can consent once, ahead of time, and no operator is prompted again. Graph only - Azure, Exchange and Purview are unaffected.
 .PARAMETER SubscriptionId
     One or more Azure subscription IDs to assess for Defender for Cloud.
     Defaults to every enabled subscription visible to the signed-in account.
@@ -156,8 +157,6 @@ param(
     # is ever dot-sourced.
     [string] $OutputFolder,
 
-    [string] $TenantId,
-
     [string[]] $SubscriptionId,
 
     [ValidateSet('Entra', 'DefenderForCloud', 'DefenderForEndpoint', 'DefenderForIdentity', 'DefenderForOffice', 'DefenderForCloudApps', 'Purview')]
@@ -191,6 +190,13 @@ param(
 
     # Skip the Exchange WAM broker entirely and go straight to the fallback auth path.
     [switch] $DisableWam,
+    [string] $TenantId,
+    # Client ID of a customer-owned app registration to use for the Graph sign-in.
+    # Omit to use the first-party Microsoft Graph Command Line Tools app. A custom
+    # registration lets the customer pre-consent the required scopes once via the
+    # portal's Grant admin consent button, instead of consenting at each sign-in.
+    [ValidatePattern('^$|^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$')]
+    [string] $GraphClientId,
 
     # Optional credentials for Exchange Online / Security & Compliance. Used as the
     # final fallback if broker-based auth cannot complete.
@@ -208,6 +214,7 @@ $ProgressPreference    = 'SilentlyContinue'
 $script:Results     = [System.Collections.Generic.List[object]]::new()
 $script:StartTime   = Get-Date
 $script:TenantLabel = 'Unknown tenant'
+$script:GraphConnectionError = $null
 
 $script:Endpoints = @{
     Global = @{
@@ -290,6 +297,12 @@ $script:RequiredModules = @(
         MinimumVersion = '3.0.0'
         NeededBy       = @('DefenderForOffice', 'Purview')
         Reason         = 'Exchange Online and Security & Compliance sessions for Defender for Office 365 and Purview.'
+    }
+    @{
+	Name           = 'Az.Security'
+	MinimumVersion = '1.0.0'
+	NeededBy       = @('DefenderForCloud')
+    	Reason         = 'Required for Defender for Cloud security contacts and other Microsoft.Security operations.'
     }
 )
 
@@ -693,11 +706,16 @@ function Invoke-SafelyList {
 }
 
 function Invoke-GraphGet {
-    <# GET against Microsoft Graph with automatic @odata.nextLink paging. #>
+    <# GET against Microsoft Graph with automatic @odata.nextLink paging and
+       throttle-aware retry. The SDK retries internally, but its backoff is too
+       tight for aggressively throttled endpoints such as the Cloud Discovery
+       beta collection, so 429s are retried here with a widening wait. #>
     param(
         [Parameter(Mandatory)][string] $Uri,
-        [int] $MaxPages = 25
+        [int] $MaxPages   = 25,
+        [int] $MaxRetries = 5
     )
+
     if ($Uri -notmatch '^https?://') {
         $Uri = '{0}/{1}' -f $script:Ep.Graph, $Uri.TrimStart('/')
     }
@@ -708,7 +726,28 @@ function Invoke-GraphGet {
 
     while ($next -and $page -lt $MaxPages) {
         $page++
-        $response = Invoke-MgGraphRequest -Method GET -Uri $next -OutputType PSObject -ErrorAction Stop
+
+        $response = $null
+        $attempt  = 0
+
+        while ($true) {
+            $attempt++
+            try {
+                $response = Invoke-MgGraphRequest -Method GET -Uri $next -OutputType PSObject -ErrorAction Stop
+                break
+            }
+            catch {
+                $isThrottled = "$($_.Exception.Message)" -match 'TooManyRequests|429|throttled'
+
+                if (-not $isThrottled -or $attempt -ge $MaxRetries) { throw }
+
+                # 2s, 4s, 8s, 16s - deliberately slower than the SDK's own retry.
+                $wait = [math]::Pow(2, $attempt)
+                Write-Step -Message ('Throttled - waiting {0}s before retry {1} of {2}' -f $wait, $attempt, $MaxRetries) -State 'Warn'
+                Start-Sleep -Seconds $wait
+            }
+        }
+
         if ($null -eq $response) { break }
 
         if ($response.PSObject.Properties.Name -contains 'value') {
@@ -720,6 +759,7 @@ function Invoke-GraphGet {
             $next = $null
         }
     }
+
     return $items
 }
 
@@ -893,34 +933,98 @@ function Connect-Workloads {
 
     if ($needGraph) {
         Write-Step -Message 'Connecting to Microsoft Graph' -State 'Start'
-        Invoke-Safely -Label 'Graph connection' -Script {
+        $script:GraphConnectionError = $null
+
+        try {
             Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+
+            $scopes = @(
+                'DeviceManagementConfiguration.Read.All'
+                'DeviceManagementManagedDevices.Read.All'
+                'SecurityIdentitiesHealth.Read.All'
+                'SecurityIdentitiesSensors.Read.All'
+                'Policy.Read.All'
+                'Policy.Read.AuthenticationMethod'
+                'RoleManagement.Read.Directory'
+                'Directory.Read.All'
+                'CloudApp-Discovery.Read.All'
+            )
+
             $context = Get-MgContext -ErrorAction SilentlyContinue
-            if (-not $context -and -not $SkipConnect) {
-                # Entra checks add Policy.Read.AuthenticationMethod, RoleManagement.Read.Directory
-                # and Directory.Read.All on top of the Defender scopes.
-                $scopes = @(
-                    'DeviceManagementConfiguration.Read.All'
-                    'DeviceManagementManagedDevices.Read.All'
-                    'SecurityIdentitiesHealth.Read.All'
-                    'SecurityIdentitiesSensors.Read.All'
-                    'Policy.Read.All'
-                    'Policy.Read.AuthenticationMethod'
-                    'RoleManagement.Read.Directory'
-                    'Directory.Read.All'
-                    'CloudApp-Discovery.Read.All'
-                )
-                $params = @{ Scopes = $scopes; Environment = $script:Ep.GraphEnv; NoWelcome = $true }
+            $mustReconnect = $false
+
+            if (-not $context) {
+                $mustReconnect = $true
+            }
+            elseif ($TenantId -and $context.TenantId -ne $TenantId) {
+                Write-Step -Message ('Existing Graph context uses tenant {0}; requested tenant is {1}. Reconnecting.' -f $context.TenantId, $TenantId) -State 'Warn'
+                $mustReconnect = $true
+            }
+            elseif ($GraphClientId -and $context.ClientId -ne $GraphClientId) {
+                Write-Step -Message ('Existing Graph context uses client {0}; requested client is {1}. Reconnecting.' -f $context.ClientId, $GraphClientId) -State 'Warn'
+                $mustReconnect = $true
+            }
+            else {
+                $missingScopes = @($scopes | Where-Object { $context.Scopes -notcontains $_ })
+                if ($missingScopes.Count -gt 0) {
+                    Write-Step -Message ('Existing Graph context is missing scopes: {0}. Reconnecting.' -f ($missingScopes -join ', ')) -State 'Warn'
+                    $mustReconnect = $true
+                }
+            }
+
+            if ($mustReconnect) {
+                if ($SkipConnect) {
+                    throw 'A valid Microsoft Graph context is not available, and -SkipConnect prevents the script from establishing one.'
+                }
+
+                if ($context) {
+                    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+                }
+
+                $params = @{
+                    Scopes       = $scopes
+                    Environment  = $script:Ep.GraphEnv
+                    ContextScope = 'Process'
+                    NoWelcome    = $true
+                }
                 if ($TenantId) { $params['TenantId'] = $TenantId }
+                if ($GraphClientId) {
+                    $params['ClientId'] = $GraphClientId
+                    Write-Step -Message ('Using app registration {0} for Graph sign-in' -f $GraphClientId) -State 'Info'
+                }
+
                 Connect-MgGraph @params -ErrorAction Stop
-                $context = Get-MgContext
+                $context = Get-MgContext -ErrorAction Stop
             }
-            if ($context) {
-                $script:TenantLabel = $context.TenantId
-                Write-Step -Message ('Graph context: {0}' -f $context.Account) -State 'Done'
+
+            if (-not $context) {
+                throw 'Connect-MgGraph completed without creating a Microsoft Graph context.'
             }
-        } | Out-Null
-    }
+
+            $script:TenantLabel = $context.TenantId
+            Write-Step -Message ('Graph connected. Tenant={0}; ClientId={1}; AuthType={2}; Account={3}' -f $context.TenantId, $context.ClientId, $context.AuthType, $context.Account) -State 'Done'
+
+            $missingScopes = @($scopes | Where-Object { $context.Scopes -notcontains $_ })
+            if ($missingScopes.Count -gt 0) {
+                throw ('Graph connected, but the token is missing delegated scopes: {0}' -f ($missingScopes -join ', '))
+            }
+        }
+
+	catch {
+
+	    Write-Host ""
+	    Write-Host "===== GRAPH EXCEPTION =====" -ForegroundColor Red
+
+	    $_ | Format-List * -Force
+
+	    Write-Host "===========================" -ForegroundColor Red
+	    Write-Host ""
+
+	    $script:GraphConnectionError = ($_ | Out-String)
+
+	    throw
+	}
+}
 
     if ($needExo) {
         Write-Step -Message 'Connecting to Exchange Online' -State 'Start'
@@ -1056,8 +1160,10 @@ function Invoke-EntraChecks {
     Write-Step -Message 'START Microsoft Entra ID assessment' -State 'Start'
 
     if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
-        Add-ModuleFailure -Product $product -Reason 'No Microsoft Graph context available' `
-            -Recommendation 'Run Connect-MgGraph with Policy.Read.All, RoleManagement.Read.Directory and Directory.Read.All, then re-run.'
+        $reason = 'No Microsoft Graph context available'
+        if ($script:GraphConnectionError) { $reason = "Microsoft Graph connection failed: $script:GraphConnectionError" }
+        Add-ModuleFailure -Product $product -Reason $reason `
+            -Recommendation 'Verify the custom app public-client configuration, redirect URI, delegated permissions, admin consent, and the exact ClientId and TenantId supplied to the script.'
         return
     }
 
@@ -1904,60 +2010,148 @@ function Test-MdcPricingPlans {
 }
 
 function Test-MdcSecurityContacts {
-    <# Security contacts drive alert email notification. No contact = no one gets told. #>
-    param([string] $Subscription, [string] $Scope, [string] $Product)
+    <#
+        Reads Defender for Cloud security contacts.
+
+        Distinguishes between:
+          - Request failure: Gray
+          - Successful request with zero contacts: Red
+          - Contact without an email address: Red
+          - Contact with email but notifications disabled: Red
+          - Notifications enabled for High severity only: Yellow
+          - Notifications enabled for Medium or Low severity: Green
+    #>
+    param(
+        [string] $Subscription,
+        [string] $Scope,
+        [string] $Product
+    )
 
     $uri = "/subscriptions/$Subscription/providers/Microsoft.Security/securityContacts?api-version=2023-12-01-preview"
-    $contacts = Invoke-Safely -Label 'MDC security contacts' -Script {
-        $response = Invoke-AzRestMethod -Method GET -Path $uri -ErrorAction Stop
-        if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
-        ($response.Content | ConvertFrom-Json).value
+
+    $contactsCall = Invoke-SafelyList -Label 'MDC security contacts' -Script {
+        $response = Invoke-AzRestMethod `
+            -Method GET `
+            -Path $uri `
+            -ErrorAction Stop
+
+        if ($response.StatusCode -ne 200) {
+            throw "HTTP $($response.StatusCode): $($response.Content)"
+        }
+
+        $payload = $response.Content | ConvertFrom-Json -ErrorAction Stop
+
+        if ($null -eq $payload) {
+            throw 'The securityContacts API returned an empty response body.'
+        }
+
+        # Return an explicitly wrapped array. This preserves a successful
+        # empty collection so Invoke-SafelyList can distinguish it from failure.
+        return ,@($payload.value)
     }
 
-    if ($null -eq $contacts) {
-        Add-Result -Product $Product -Category 'Notifications' -Setting 'Security contact configured' -Scope $Scope `
-            -Status 'Gray' -Current 'Could not read security contacts' -Expected 'At least one contact with alert notifications on' `
-            -Recommendation 'Check permissions on Microsoft.Security/securityContacts.'
+    if (-not $contactsCall.Ok) {
+        Add-Result `
+            -Product $Product `
+            -Category 'Notifications' `
+            -Setting 'Security contact configured' `
+            -Scope $Scope `
+            -Status 'Gray' `
+            -Current ('Request failed: {0}' -f $contactsCall.Error) `
+            -Expected 'At least one contact with alert notifications on' `
+            -Recommendation 'Verify read access to Microsoft.Security/securityContacts and review the detailed request error.'
         return
     }
 
-    $withEmail = @($contacts | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-PropertyValue $_.properties 'emails')) })
+    $contacts = @($contactsCall.Items)
+
+    # Invoke-SafelyList wraps the explicitly returned array. Flatten it if the
+    # returned item is itself an array.
+    if (
+        $contacts.Count -eq 1 -and
+        $contacts[0] -is [System.Array]
+    ) {
+        $contacts = @($contacts[0])
+    }
+
+    if ($contacts.Count -eq 0) {
+        Add-Result `
+            -Product $Product `
+            -Category 'Notifications' `
+            -Setting 'Security contact configured' `
+            -Scope $Scope `
+            -Status 'Red' `
+            -Current 'No security contacts configured' `
+            -Expected 'At least one contact with alert notifications on' `
+            -Recommendation 'Configure an email notification contact under Defender for Cloud > Environment settings > Email notifications. Use a monitored distribution list rather than an individual account.'
+        return
+    }
+
+    $withEmail = @(
+        $contacts | Where-Object {
+            $properties = Get-PropertyValue $_ 'properties'
+            $emails = Get-PropertyValue $properties 'emails'
+            -not [string\]::IsNullOrWhiteSpace("$emails")
+        }
+    )
 
     if ($withEmail.Count -eq 0) {
-        Add-Result -Product $Product -Category 'Notifications' -Setting 'Security contact configured' -Scope $Scope `
-            -Status 'Red' -Current 'No security contact email set' -Expected 'Security contact email set' `
-            -Recommendation 'Defender for Cloud > Environment settings > Email notifications - add a distribution list, not an individual.'
+        Add-Result `
+            -Product $Product `
+            -Category 'Notifications' `
+            -Setting 'Security contact configured' `
+            -Scope $Scope `
+            -Status 'Red' `
+            -Current ('{0} security contact object(s) found, but none contain an email address' -f $contacts.Count) `
+            -Expected 'At least one security contact email set' `
+            -Recommendation 'Add a monitored distribution list under Defender for Cloud > Environment settings > Email notifications.'
         return
     }
 
-    Add-Result -Product $Product -Category 'Notifications' -Setting 'Security contact configured' -Scope $Scope `
-        -Status 'Green' -Current ('{0} contact(s) with email' -f $withEmail.Count) -Expected 'At least one contact' `
+    Add-Result `
+        -Product $Product `
+        -Category 'Notifications' `
+        -Setting 'Security contact configured' `
+        -Scope $Scope `
+        -Status 'Green' `
+        -Current ('{0} of {1} contact(s) contain an email address' -f $withEmail.Count, $contacts.Count) `
+        -Expected 'At least one security contact email set' `
         -Recommendation 'No action required.'
 
     foreach ($contact in $withEmail) {
-        $alertNotifications = Get-PropertyValue $contact.properties 'alertNotifications'
-        $notifyState        = Get-PropertyValue $alertNotifications 'state'
-        $minimalSeverity    = Get-PropertyValue $alertNotifications 'minimalSeverity'
+        $properties = Get-PropertyValue $contact 'properties'
+        $alertNotifications = Get-PropertyValue $properties 'alertNotifications'
+        $notifyState = Get-PropertyValue $alertNotifications 'state'
+        $minimalSeverity = Get-PropertyValue $alertNotifications 'minimalSeverity'
 
         if ($notifyState -ne 'On') {
             $status = 'Red'
-            $rec    = 'Turn alert notifications On so email is actually delivered.'
+            $recommendation = 'Turn alert notifications On so Defender for Cloud alerts are delivered by email.'
         }
         elseif ($minimalSeverity -eq 'High') {
             $status = 'Yellow'
-            $rec    = 'Only High severity alerts are emailed. Lower the threshold to Medium so escalating attacks are not missed.'
+            $recommendation = 'Only High-severity alerts are emailed. Consider Medium so escalating attacks are not missed.'
+        }
+        elseif ($minimalSeverity -in @('Medium', 'Low')) {
+            $status = 'Green'
+            $recommendation = 'No action required.'
         }
         else {
-            $status = 'Green'
-            $rec    = 'No action required.'
+            $status = 'Gray'
+            $recommendation = 'The notification severity returned by the API was not recognized. Review the email notification configuration manually.'
         }
 
-        Add-Result -Product $Product -Category 'Notifications' -Setting 'Alert notification severity' -Scope $Scope `
-            -Status $status -Current ("State=$notifyState; MinimalSeverity=$minimalSeverity") `
-            -Expected 'State=On; MinimalSeverity=Medium or Low' -Recommendation $rec
+        Add-Result `
+            -Product $Product `
+            -Category 'Notifications' `
+            -Setting 'Alert notification severity' `
+            -Scope $Scope `
+            -Status $status `
+            -Current ("State=$notifyState; MinimalSeverity=$minimalSeverity") `
+            -Expected 'State=On; MinimalSeverity=Medium or Low' `
+            -Recommendation $recommendation
     }
 }
-
 function Test-MdcIntegrations {
     <# MDE, MDA and Sentinel integration toggles under Microsoft.Security/settings. #>
     param([string] $Subscription, [string] $Scope, [string] $Product)
@@ -2498,8 +2692,10 @@ function Invoke-DefenderForIdentityChecks {
     Write-Step -Message 'START Defender for Identity assessment' -State 'Start'
 
     if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
-        Add-ModuleFailure -Product $product -Reason 'No Microsoft Graph context available' `
-            -Recommendation 'Run Connect-MgGraph with SecurityIdentitiesSensors.Read.All and SecurityIdentitiesHealth.Read.All.'
+        $reason = 'No Microsoft Graph context available'
+        if ($script:GraphConnectionError) { $reason = "Microsoft Graph connection failed: $script:GraphConnectionError" }
+        Add-ModuleFailure -Product $product -Reason $reason `
+            -Recommendation 'Verify the custom app public-client configuration, redirect URI, delegated permissions, admin consent, and the exact ClientId and TenantId supplied to the script.'
         return
     }
 
@@ -3107,22 +3303,43 @@ function Test-MdoTenantHygiene {
             -Recommendation 'Verify Exchange Online read permissions.'
     }
 
-    $dkim = Invoke-Safely -Label 'Get-DkimSigningConfig' -Script { Get-DkimSigningConfig -ErrorAction Stop }
-    if ($dkim) {
-        $custom = @($dkim | Where-Object { $_.Domain -notmatch 'onmicrosoft\.com$' })
-        if ($custom.Count -eq 0) { $custom = @($dkim) }
-        $enabled = @($custom | Where-Object { $_.Enabled -eq $true }).Count
+    $dkimCall = Invoke-SafelyList -Label 'Get-DkimSigningConfig' -Script {
+        Get-DkimSigningConfig -ErrorAction Stop -WarningAction SilentlyContinue
+    }
 
+    if (-not $dkimCall.Ok) {
         Add-Result -Product $Product -Category 'Tenant hygiene' -Setting 'DKIM signing' `
-            -Status (Get-CoverageState -Compliant $enabled -Total $custom.Count) `
-            -Current ('Enabled on {0} of {1} custom domains' -f $enabled, $custom.Count) -Expected 'Enabled on all sending domains' `
-            -Recommendation 'Enable DKIM on every custom sending domain. DMARC enforcement depends on it.'
+            -Status 'Gray' -Current ('Request failed: {0}' -f $dkimCall.Error) `
+            -Expected 'Enabled on all custom sending domains' `
+            -Recommendation 'Verify Exchange Online connectivity and confirm the signed-in account can read DKIM configuration.'
+        return
     }
-    else {
+
+    $dkim = @($dkimCall.Items)
+    if ($dkim.Count -eq 0) {
         Add-Result -Product $Product -Category 'Tenant hygiene' -Setting 'DKIM signing' `
-            -Status 'Gray' -Current 'Could not read DKIM configuration' -Expected 'Enabled on all sending domains' `
-            -Recommendation 'Verify Exchange Online read permissions.'
+            -Status 'Red' -Current 'No DKIM signing configurations were returned' `
+            -Expected 'Enabled on all custom sending domains' `
+            -Recommendation 'Configure DKIM signing for every custom domain used to send email.'
+        return
     }
+
+    $custom = @($dkim | Where-Object { $_.Domain -notmatch 'onmicrosoft\.com$' })
+    if ($custom.Count -eq 0) {
+        Add-Result -Product $Product -Category 'Tenant hygiene' -Setting 'DKIM signing' `
+            -Status 'Red' -Current ('{0} DKIM configuration(s) returned, but none are for a custom domain' -f $dkim.Count) `
+            -Expected 'Enabled on all custom sending domains' `
+            -Recommendation 'Configure DKIM signing for every custom domain used to send email.'
+        return
+    }
+
+    $enabled = @($custom | Where-Object { $_.Enabled -eq $true }).Count
+    Add-Result -Product $Product -Category 'Tenant hygiene' -Setting 'DKIM signing' `
+        -Status (Get-CoverageState -Compliant $enabled -Total $custom.Count) `
+        -Current ('Enabled on {0} of {1} custom domains' -f $enabled, $custom.Count) `
+        -Expected 'Enabled on all custom sending domains' `
+        -Recommendation 'Enable DKIM on every custom sending domain. DMARC enforcement depends on it.'
+
 }
 
 #endregion
@@ -3141,12 +3358,13 @@ function Invoke-DefenderForCloudAppsChecks {
         Test-MdaConditionalAccess -Product $product
     }
     else {
-        Add-ModuleFailure -Product $product -Reason 'No Microsoft Graph context available' `
-            -Recommendation 'Run Connect-MgGraph with CloudApp-Discovery.Read.All and Policy.Read.All.'
+        $reason = 'No Microsoft Graph context available'
+        if ($script:GraphConnectionError) { $reason = "Microsoft Graph connection failed: $script:GraphConnectionError" }
+        Add-ModuleFailure -Product $product -Reason $reason `
+            -Recommendation 'Verify the custom app public-client configuration, redirect URI, delegated permissions, admin consent, and the exact ClientId and TenantId supplied to the script.'
     }
 
     Test-MdaLegacyApi -Product $product
-
     Write-Step -Message 'END Defender for Cloud Apps assessment' -State 'Done'
 }
 
@@ -3397,20 +3615,19 @@ function Test-PurviewAudit {
 
     # Audit retention policies (Audit Premium / E5) extend retention beyond the default.
     if (Test-CmdletAvailable -Name 'Get-UnifiedAuditLogRetentionPolicy') {
-        $retention = Invoke-Safely -Label 'Get-UnifiedAuditLogRetentionPolicy' -Script {
-            Get-UnifiedAuditLogRetentionPolicy -ErrorAction Stop
+        $retentionCall = Invoke-SafelyList -Label 'Get-UnifiedAuditLogRetentionPolicy' -Script {
+            Get-UnifiedAuditLogRetentionPolicy -ErrorAction Stop -WarningAction SilentlyContinue
         }
-
-        if ($null -eq $retention) {
+        if (-not $retentionCall.Ok) {
             Add-Result -Product $Product -Category 'Audit' -Setting 'Custom audit retention policy' `
-                -Status 'Gray' -Current 'Could not read audit retention policies' `
+                -Status 'Gray' -Current ('Request failed: {0}' -f $retentionCall.Error) `
                 -Expected 'At least one policy retaining high-value activity beyond the default' `
                 -Recommendation 'Verify the account holds an audit read role.'
         }
         else {
-            $count   = @($retention).Count
-            $enabled = @($retention | Where-Object { (Get-PropertyValue $_ 'Enabled') -ne $false }).Count
-
+            $retention = @($retentionCall.Items)
+            $count     = $retention.Count
+            $enabled   = @($retention | Where-Object { (Get-PropertyValue $_ 'Enabled') -ne $false }).Count
             if ($count -eq 0) {
                 $state   = 'Yellow'
                 $current = 'No custom audit retention policy (default retention only)'
@@ -3421,7 +3638,6 @@ function Test-PurviewAudit {
                 $current = ('{0} of {1} audit retention policies enabled' -f $enabled, $count)
                 $rec     = 'Confirm the retention duration matches your regulatory and investigation requirements.'
             }
-
             Add-Result -Product $Product -Category 'Audit' -Setting 'Custom audit retention policy' `
                 -Status $state -Current $current `
                 -Expected 'Retention aligned to your investigation window' -Recommendation $rec
@@ -3801,7 +4017,7 @@ function Test-PurviewSensitivityLabels {
         return
     }
 
-    $call = Invoke-SafelyList -Label 'Get-Label' -Script { Get-Label -ErrorAction Stop }
+    $call = Invoke-SafelyList -Label 'Get-Label' -Script { Get-Label -ErrorAction Stop -WarningAction SilentlyContinue }
 
     if (-not $call.Ok) {
         Add-Result -Product $Product -Category 'Information protection' -Setting 'Sensitivity label inventory' `
@@ -3874,7 +4090,7 @@ function Test-PurviewSensitivityLabels {
     # Label policies are what actually publish labels to users.
     if (-not (Test-CmdletAvailable -Name 'Get-LabelPolicy')) { return }
 
-    $policyCall = Invoke-SafelyList -Label 'Get-LabelPolicy' -Script { Get-LabelPolicy -ErrorAction Stop }
+    $policyCall = Invoke-SafelyList -Label 'Get-LabelPolicy' -Script { Get-LabelPolicy -ErrorAction Stop -WarningAction SilentlyContinue }
 
     if (-not $policyCall.Ok) {
         Add-Result -Product $Product -Category 'Information protection' -Setting 'Sensitivity label publication' `
