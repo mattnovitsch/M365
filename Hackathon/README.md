@@ -411,7 +411,29 @@ role membership.
     -MdaPortalUrl "https://tenant.portal.cloudappsecurity.com" `
     -MdaApiToken "<token>"
 ```
+## GCC / GCC High Customer
 
+Specify the appropriate Microsoft Graph environment and tenant-specific application registration when connecting to Microsoft Government environments.
+
+### GCC
+
+```powershell
+.\Invoke-DefenderBestPracticeReport.ps1 `
+    -GraphEnvironment USGov `
+    -GraphClientId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+    -Modules Entra,DefenderForOffice,Purview
+```
+
+### GCC High
+
+```powershell
+.\Invoke-DefenderBestPracticeReport.ps1 `
+    -GraphEnvironment USGov `
+    -GraphClientId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+    -Modules Entra,DefenderForOffice,Purview,DefenderForIdentity
+```
+
+> **Note:** A separate app registration must be created in the customer's GCC/GCC High tenant. Commercial tenant app registrations cannot be used to access Microsoft Government tenants. All required Microsoft Graph delegated permissions must be configured and granted admin consent within the government tenant.
 ---
 
 # Output
