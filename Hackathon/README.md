@@ -26,10 +26,10 @@ Status values:
 
 | Status | Meaning |
 |----------|----------|
-| Green | Configured according to recommendation |
-| Yellow | Partially configured or operating in audit/report-only mode |
-| Red | Not configured or not meeting recommendation |
-| Gray | Unable to assess because of permissions, licensing, connectivity, or missing prerequisites |
+| 🟢 Green | Configured according to recommendation |
+| 🟡 Yellow | Partially configured or operating in audit/report-only mode |
+| 🔴 Red | Not configured or not meeting recommendation |
+| ⚪ Gray | Unable to assess because of permissions, licensing, connectivity, or missing prerequisites |
 
 ---
 
