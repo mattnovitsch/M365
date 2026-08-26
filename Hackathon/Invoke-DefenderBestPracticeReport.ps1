@@ -4005,7 +4005,7 @@ function Test-PurviewInsiderRisk {
 #endregion
 
 # =====================================================================================
-# REGION: HTML report generation  -- REPLACEMENT
+# REGION: HTML report generation  -- REPLACEMENT (product filter + Learn docs column)
 # =====================================================================================
 #
 #   HOW TO APPLY
@@ -4018,37 +4018,105 @@ function Test-PurviewInsiderRisk {
 #       #region Reporting
 #
 #   ...and delete everything from that line down to and including the matching
-#
-#       #endregion
-#
-#   (it sits immediately before "# REGION: MAIN"). Paste this file's contents in
-#   its place. Nothing else in the script changes - Add-Result, the check
-#   functions and MAIN are all untouched.
+#   "#endregion" (it sits immediately before "# REGION: MAIN"). Paste this file's
+#   contents in its place. Nothing else in the script changes.
 #
 #
-#   WHAT CHANGED vs. the original New-HtmlReport
-#   --------------------------------------------
-#   1. Product dropdown added to the .controls bar, built from the products that
-#      actually produced results in this run. Add an eighth workload later and it
-#      appears in the list automatically - no HTML edits needed.
+#   WHAT'S NEW IN THIS VERSION
+#   --------------------------
+#   * Seventh column, "Learn docs", sits immediately to the right of Recommendation.
+#   * Link resolution runs in three tiers, in this order:
 #
-#   2. Each product's <h2> + <table> is now wrapped in
-#         <div class="product-section" data-product="...">
-#      so selecting a product hides the whole section, heading included, rather
-#      than leaving an empty table behind.
+#       1. $row.Reference   - Add-Result already accepts a -Reference parameter and
+#                             stores it, but the original report never rendered it.
+#                             Any check that passes -Reference now shows that exact
+#                             URL. This is the per-check override.
 #
-#   3. Every <tr> now carries data-product alongside the existing data-status.
+#       2. $script:LearnDocMap - curated "Product|Category" lookup. Every URL in the
+#                             shipped map was verified against learn.microsoft.com
+#                             rather than guessed.
 #
-#   4. applyFilters() ANDs all three filters together - product AND status AND
-#      search text - and hides any section left with zero visible rows.
+#       3. Learn search     - anything with no curated entry falls back to a scoped
+#                             learn.microsoft.com search built from the product and
+#                             setting name. Never a dead link, and the column is
+#                             never empty.
 #
-#   5. Added a live match counter, a "no matches" message, and a Reset button.
+#     Tier 3 links are rendered in muted italics and titled "Learn search" so you can
+#     see at a glance which rows still want a curated URL.
 #
-#   The status buttons, theme toggle, print styles and colour palette are
-#   unchanged.
+#   * Column widths rebalanced to fit seven columns without wrapping the status pill.
+#   * The docs column is excluded from print output to keep the printed table narrow;
+#     remove the .doc rule in the @media print block if you want it printed.
+#
+#
+#   EXTENDING THE MAP
+#   -----------------
+#   Two ways to add a real doc link:
+#
+#     a) Per check (most precise) - pass -Reference on the Add-Result call:
+#
+#          Add-Result -Product $Product -Category 'Sensors' -Setting 'Sensor health status' `
+#              -Status $state -Current $current -Expected $expected `
+#              -Recommendation $rec `
+#              -Reference 'https://learn.microsoft.com/en-us/defender-for-identity/...'
+#
+#     b) Per category (bulk) - add a line to $script:LearnDocMap below, keyed
+#        'Product|Category' using the exact strings passed to Add-Result.
+#
 # =====================================================================================
 
 #region Reporting
+
+<#
+    Curated documentation links, keyed 'Product|Category'.
+
+    The Product and Category strings must match exactly what the check functions pass
+    to Add-Result - that is what the lookup joins on.
+
+    Only verified URLs belong here. Anything absent falls through to a Learn search,
+    which is always a working link. A wrong hardcoded URL is worse than a search
+    result, because it looks authoritative while sending the reader nowhere.
+#>
+$script:LearnDocMap = @{
+
+    # ---- Microsoft Entra ID ----
+    'Microsoft Entra ID|Baseline protection'        = 'https://learn.microsoft.com/en-us/entra/identity/conditional-access/overview'
+    'Microsoft Entra ID|Conditional Access'         = 'https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-conditional-access-policies'
+
+    # ---- Defender for Endpoint ----
+    'Defender for Endpoint|Attack surface reduction' = 'https://learn.microsoft.com/en-us/defender-endpoint/attack-surface-reduction-rules-reference'
+    'Defender for Endpoint|Policy baseline'          = 'https://learn.microsoft.com/en-us/defender-endpoint/attack-surface-reduction-rules-overview'
+
+    # ---- Defender for Office 365 ----
+    'Defender for Office 365|Preset policies'       = 'https://learn.microsoft.com/en-us/defender-office-365/preset-security-policies'
+    'Defender for Office 365|Anti-phishing'         = 'https://learn.microsoft.com/en-us/defender-office-365/'
+    'Defender for Office 365|Safe Links'            = 'https://learn.microsoft.com/en-us/defender-office-365/'
+    'Defender for Office 365|Safe Attachments'      = 'https://learn.microsoft.com/en-us/defender-office-365/'
+    'Defender for Office 365|Anti-malware'          = 'https://learn.microsoft.com/en-us/defender-office-365/'
+    'Defender for Office 365|Anti-spam (inbound)'   = 'https://learn.microsoft.com/en-us/defender-office-365/'
+    'Defender for Office 365|Anti-spam (outbound)'  = 'https://learn.microsoft.com/en-us/defender-office-365/'
+    'Defender for Office 365|Tenant hygiene'        = 'https://learn.microsoft.com/en-us/defender-office-365/'
+
+    # ---- Microsoft Purview ----
+    'Microsoft Purview|Data loss prevention'        = 'https://learn.microsoft.com/en-us/purview/dlp-create-deploy-policy'
+    'Microsoft Purview|DLP policy detail'           = 'https://learn.microsoft.com/en-us/purview/dlp-policy-reference'
+    'Microsoft Purview|DLP coverage'                = 'https://learn.microsoft.com/en-us/purview/dlp-policy-reference'
+}
+
+<#
+    Per-product scope hints for the Learn search fallback. Narrowing the search to the
+    right product family makes the fallback genuinely useful rather than a generic
+    keyword dump.
+#>
+$script:LearnSearchScope = @{
+    'Microsoft Entra ID'       = 'Entra'
+    'Defender for Cloud'       = 'Defender for Cloud'
+    'Defender for Endpoint'    = 'Defender for Endpoint'
+    'Defender for Identity'    = 'Defender for Identity'
+    'Defender for Office 365'  = 'Defender for Office 365'
+    'Defender for Cloud Apps'  = 'Defender for Cloud Apps'
+    'Microsoft Purview'        = 'Purview'
+}
 
 function ConvertTo-ProductSlug {
     <#
@@ -4060,6 +4128,49 @@ function ConvertTo-ProductSlug {
 
     if ([string]::IsNullOrWhiteSpace($Product)) { return 'Unknown' }
     return ($Product -replace '[^A-Za-z0-9]', '')
+}
+
+function Get-LearnDocLink {
+    <#
+        Resolves the documentation link for a single result row.
+
+        Returns a hashtable:
+            @{ Url = '<https url>'; Label = 'Learn docs' | 'Learn search'; IsSearch = $bool }
+
+        Resolution order is explicit (per-check Reference, then curated map, then
+        search) so that a check author can always override the category default
+        without touching this function.
+    #>
+    param([Parameter(Mandatory)] $Row)
+
+    # ---- Tier 1: explicit per-check reference ----
+    $reference = Get-PropertyValue $Row 'Reference'
+    if (-not [string]::IsNullOrWhiteSpace($reference)) {
+        return @{ Url = $reference; Label = 'Learn docs'; IsSearch = $false }
+    }
+
+    $product  = "$(Get-PropertyValue $Row 'Product')"
+    $category = "$(Get-PropertyValue $Row 'Category')"
+    $setting  = "$(Get-PropertyValue $Row 'Setting')"
+
+    # ---- Tier 2: curated Product|Category map ----
+    $key = '{0}|{1}' -f $product, $category
+    if ($script:LearnDocMap.ContainsKey($key)) {
+        return @{ Url = $script:LearnDocMap[$key]; Label = 'Learn docs'; IsSearch = $false }
+    }
+
+    # ---- Tier 3: scoped Learn search ----
+    # Strip the "Role: " / "Policy: " / "Plan: " style prefixes the detail rows use,
+    # otherwise the search term is dominated by the prefix rather than the subject.
+    $terms = $setting -replace '^(Role|Policy|Plan|Method|Weak method|Extension|Auto-provisioning):\s*', ''
+
+    $scope = $product
+    if ($script:LearnSearchScope.ContainsKey($product)) { $scope = $script:LearnSearchScope[$product] }
+
+    $query = ('{0} {1}' -f $scope, $terms).Trim()
+    $url   = 'https://learn.microsoft.com/en-us/search/?terms={0}' -f [uri]::EscapeDataString($query)
+
+    return @{ Url = $url; Label = 'Learn search'; IsSearch = $true }
 }
 
 function New-HtmlReport {
@@ -4078,6 +4189,8 @@ function New-HtmlReport {
             status   (All / Green / Yellow / Red / Gray buttons)
             search   (free text across the whole row)
         Product sections with no surviving rows are hidden entirely.
+
+        DOCUMENTATION: each row carries a Learn link resolved by Get-LearnDocLink.
     #>
     param(
         [Parameter(Mandatory)][object[]] $Data,
@@ -4142,7 +4255,7 @@ function New-HtmlReport {
   header { background:linear-gradient(135deg,var(--hdr-a) 0%,var(--hdr-b) 100%); color:#fff; padding:28px 32px; }
   header h1 { margin:0 0 6px; font-size:24px; font-weight:600; }
   header .meta { font-size:13px; opacity:.85; }
-  .wrap { max-width:1500px; margin:0 auto; padding:0 32px; }
+  .wrap { max-width:1650px; margin:0 auto; padding:0 32px; }
   .cards { display:flex; flex-wrap:wrap; gap:16px; margin:24px 0; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:8px;
           padding:18px 22px; min-width:160px; flex:1; box-shadow:0 1px 3px rgba(0,0,0,.05); }
@@ -4193,6 +4306,10 @@ function New-HtmlReport {
   .cur { font-family:Consolas,'Courier New',monospace; font-size:12.5px; color:var(--cur-ink); word-break:break-word; }
   .rec { color:var(--muted); font-size:13px; }
   .scope { font-size:11px; color:var(--muted); }
+  .doc { font-size:12.5px; }
+  .doc a { color:var(--accent); text-decoration:none; }
+  .doc a:hover { text-decoration:underline; }
+  .doc a.search { color:var(--muted); font-style:italic; }
   footer { text-align:center; color:var(--muted); font-size:12px; margin-top:36px; }
   .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); margin-bottom:18px; }
   @media print {
@@ -4200,6 +4317,9 @@ function New-HtmlReport {
     /* Print every product section regardless of the on-screen filter. */
     .product-section { display:block !important; }
     .product-section tbody tr { display:table-row !important; }
+    /* Drop the docs column in print so the table stays readable on paper.
+       Delete these two rules if you want the links printed. */
+    th.doc-col, td.doc { display:none; }
     /* Always print on white, whatever the on-screen theme is. */
     html, body, [data-theme="dark"] {
       --ink:#1b1b1b; --muted:#616161; --line:#e1e1e1; --card:#ffffff; --page:#ffffff;
@@ -4331,7 +4451,7 @@ $productOptions    </select>
         [void]$sb.Append("<div class=`"product-section`" data-product=`"$slug`">")
 
         [void]$sb.Append("<h2>$productSafe<span class=`"pill`">$($rows.Count) checks &middot; $pg green &middot; $py yellow &middot; $pr red &middot; $px gray</span></h2>")
-        [void]$sb.Append('<table><thead><tr><th style="width:22%">Setting</th><th style="width:12%">Category</th><th style="width:9%">Status</th><th style="width:19%">Current value</th><th style="width:13%">Expected</th><th style="width:25%">Recommendation</th></tr></thead><tbody>')
+        [void]$sb.Append('<table><thead><tr><th style="width:20%">Setting</th><th style="width:11%">Category</th><th style="width:8%">Status</th><th style="width:17%">Current value</th><th style="width:12%">Expected</th><th style="width:22%">Recommendation</th><th class="doc-col" style="width:10%">Learn docs</th></tr></thead><tbody>')
 
         $sortRank = @{ Red = 0; Yellow = 1; Gray = 2; Green = 3 }
         $sorted = $rows | Sort-Object @{ Expression = { $sortRank[$_.Status] } }, Category, Setting
@@ -4349,11 +4469,23 @@ $productOptions    </select>
             $expText = ConvertTo-HtmlSafe $row.Expected
             $recText = ConvertTo-HtmlSafe $row.Recommendation
 
-            # {0} status  {1} setting  {2} category  {3} current
-            # {4} expected  {5} recommendation  {6} product slug
-            $template = "<tr class=`"{0}`" data-status=`"{0}`" data-product=`"{6}`"><td>{1}</td><td class=`"cat`">{2}</td><td><span class=`"st {0}`">{0}</span></td><td class=`"cur`">{3}</td><td class=`"cur`">{4}</td><td class=`"rec`">{5}</td></tr>"
+            # ---- Documentation cell ----
+            $doc      = Get-LearnDocLink -Row $row
+            $docUrl   = ConvertTo-HtmlSafe $doc.Url
+            $docLabel = ConvertTo-HtmlSafe $doc.Label
+            $docClass = ''
+            $docTitle = 'Opens the Microsoft Learn article for this check'
+            if ($doc.IsSearch) {
+                $docClass = ' class="search"'
+                $docTitle = 'No curated article for this check yet - opens a scoped Microsoft Learn search'
+            }
+            $docCell = "<a href=`"$docUrl`"$docClass target=`"_blank`" rel=`"noopener noreferrer`" title=`"$docTitle`">$docLabel</a>"
 
-            [void]$sb.Append(($template -f $row.Status, $setting, $catText, $curText, $expText, $recText, $slug))
+            # {0} status  {1} setting  {2} category  {3} current
+            # {4} expected  {5} recommendation  {6} product slug  {7} doc cell
+            $template = "<tr class=`"{0}`" data-status=`"{0}`" data-product=`"{6}`"><td>{1}</td><td class=`"cat`">{2}</td><td><span class=`"st {0}`">{0}</span></td><td class=`"cur`">{3}</td><td class=`"cur`">{4}</td><td class=`"rec`">{5}</td><td class=`"doc`">{7}</td></tr>"
+
+            [void]$sb.Append(($template -f $row.Status, $setting, $catText, $curText, $expText, $recText, $slug, $docCell))
         }
 
         [void]$sb.Append('</tbody></table>')
