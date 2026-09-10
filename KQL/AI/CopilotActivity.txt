@@ -1,0 +1,17 @@
+//details
+CloudAppEvents
+| where ActivityType contains "copilot"
+| extend Raw=parse_json(RawEventData)
+| extend UserId = tostring(Raw.UserId)
+| extend ApplicationName = tostring(Raw.ApplicationName)
+| extend AppIdentity = tostring(Raw.AppIdentity)
+| project TimeGenerated, AccountDisplayName, ApplicationName,AppIdentity,RawEventData 
+
+//Count of user activity
+CloudAppEvents
+| where ActivityType == "Interactwithcopilot"
+| extend Raw=parse_json(RawEventData)
+| extend UserId = tostring(Raw.UserId)
+| extend ApplicationName = tostring(Raw.ApplicationName)
+| extend AppIdentity = tostring(Raw.AppIdentity)
+| summarize CountApps=count(AppIdentity) by AccountDisplayName, ApplicationName,AppIdentity 
