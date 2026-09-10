@@ -1,0 +1,26 @@
+// Local agents + MCP server inventory
+AgentsInfo
+| where Platform == "LocalAgents"
+| where LifecycleStatus != "Deleted"
+| extend Raw = todynamic(RawAgentInfo)
+| extend Meta = Raw.localAgentMetadata
+| extend DeviceId     = tostring(Meta.machineId),
+         DeviceName   = tostring(Meta.deviceName),
+         AadDeviceId  = tostring(Meta.aadDeviceId),
+         AccountName  = tostring(Meta.accountName),
+         AccountDomain= tostring(Meta.accountDomain),
+         mcpServers   = Raw.mcpServers
+| summarize arg_max(Timestamp, Version, mcpServers, DeviceName, AccountName)
+    by AgentId, Name, DeviceId, AadDeviceId
+// resolve device name if the agent record only carries an ID
+| join kind=leftouter (
+    DeviceInfo
+    | where Timestamp > ago(7d)
+    | summarize arg_max(Timestamp, DeviceName) by DeviceId
+    | project DeviceId, ResolvedDeviceName = DeviceName
+  ) on DeviceId
+| mv-expand McpServer = mcpServers
+| extend McpName     = tostring(McpServer.name),
+         McpType     = tostring(McpServer.type),
+         McpEndpoint = tostring(coalesce(McpServer.endpoint, McpServer.url, McpServer.command))
+| project Timestamp, DeviceName, AgentName = Name, Version, McpName, McpType, McpEndpoint, AgentId

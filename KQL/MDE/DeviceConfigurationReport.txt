@@ -1,0 +1,22 @@
+DeviceTvmSecureConfigurationAssessment
+| where ConfigurationId in ('scid-90', 'scid-91', 'scid-92', 'scid-96', 'scid-2000','cid-2003', 'scid-2010', 'scid-2012','scid-2013','scid-2016' ,'scid-6090', 'scid-6091', 'scid-6094')
+| summarize arg_max(Timestamp, IsCompliant, IsApplicable) by DeviceName, ConfigurationId
+| extend ConfigurationIds = case(
+    ConfigurationId == 'scid-90', 'Email Scanning',
+    ConfigurationId == 'scid-91', 'Behavior Montioring',
+    ConfigurationId == 'scid-92', 'Scan Downloads/Attachments',
+    ConfigurationId == 'scid-96', 'Network Protection',
+    ConfigurationId == 'scid-2000', 'Defender EDR Sensor',
+    ConfigurationId == 'scid-2003', 'Tamper Protection',
+    ConfigurationId == 'scid-2010', 'Defender Status',
+    ConfigurationId == 'scid-2012', 'Real-time Protection',
+    ConfigurationId == 'scid-2013', 'PUA protection',
+    ConfigurationId == 'scid-2016', 'Cloud-Delivered Protection',
+    ConfigurationId == 'scid-6090', 'Real-time Protection',
+    ConfigurationId == 'scid-6091', 'PUA protection',
+    ConfigurationId == 'scid-6094', 'Cloud-Delivered Protection',
+    'N/A'),
+    Status = case(IsCompliant == 1, 'Enabled', IsCompliant == 0, 'Disabled','Not Applicable')
+| extend packed = pack(ConfigurationIds, Status)
+| summarize Results = make_bag(packed) by DeviceName
+| evaluate bag_unpack(Results)

@@ -1,0 +1,32 @@
+DeviceTvmSecureConfigurationAssessment
+| where ConfigurationCategory == 'Security controls'
+| where ConfigurationSubcategory == 'Attack Surface Reduction'
+| where ConfigurationId in ('scid-2500', 'scid-2501', 'scid-2502', 'scid-2503', 'scid-2504', 'scid-2505', 'scid-2506', 'scid-2507', 'scid-2508', 'scid-2509', 'scid-2510', 'scid-2511', 'scid-2512', 'scid-2513', 'scid-2514', 'scid-2515', 'scid-2516','scid-2517','scid-2518')
+| summarize arg_max(Timestamp, IsCompliant, IsApplicable) by DeviceName, ConfigurationId
+| extend ConfigurationIds = case( ConfigurationId == 'scid-2500', 'Block_Executable_Content_From_Email_Client_And_Webmail',
+    ConfigurationId == 'scid-2501', 'Block_all_Office_applications_from_creating_child_processes',
+    ConfigurationId == 'scid-2502', 'Block_Office_applications_from_creating_executable_content',
+    ConfigurationId == 'scid-2503', 'Block_Office_applications_from_injecting_code_into_other_processes',
+    ConfigurationId == 'scid-2504', 'Block_JavaScript_or_VBScript_from_launching_downloaded_executable_content',
+    ConfigurationId == 'scid-2505', 'Block_execution_of_potentially_obfuscated_scripts',
+    ConfigurationId == 'scid-2506', 'Block_Win32_API_calls_from_Office_macros',
+    ConfigurationId == 'scid-2507', 'Block_executable_files_from_running_unless_meet_prevalence,age,or_trusted_list_criterion',
+    ConfigurationId == 'scid-2508', 'Use_advanced_protection_against_ransomware',
+    ConfigurationId == 'scid-2509', 'Block_credential_stealing_from(lsass.exe)',
+    ConfigurationId == 'scid-2510', 'Block_process_creations_originating_from_PSExec_and_WMI_commands',
+    ConfigurationId == 'scid-2511', 'Block_untrusted_and_unsigned_processes_that_run_from_USB',
+    ConfigurationId == 'scid-2512', 'Block_Office_communication_application_from_creating_child_processes',
+    ConfigurationId == 'scid-2513', 'Block_Adobe_Reader_from_creating_child_processes',
+    ConfigurationId == 'scid-2514', 'Block_persistence_through_WMI_event_subscription',
+    ConfigurationId == 'scid-2515', 'Block_abuse_of_exploited_vulnerable_signed_drivers',
+    ConfigurationId == 'scid-2516', 'Block_Webshell_creation_for_Servers',
+    ConfigurationId == 'scid-2517', 'Block_use_of_copied_or_impersonated_system_tools',
+    ConfigurationId == 'scid-2518', 'Block_rebooting_machine_in_Safe_Mode',
+    'N/A'),
+    Status = case(
+        IsCompliant == 1, 'Enabled', 
+        IsCompliant == 0, 'Disabled',
+        'Not Applicable')
+        | extend packed = pack(ConfigurationIds, Status)
+| summarize Results = make_bag(packed) by DeviceName
+| evaluate bag_unpack(Results)
