@@ -20,18 +20,26 @@ The original test collection includes scenarios for:
 7. Attempted removal or modification of Microsoft Defender protections
 8. Suspicious PowerShell behavior
 
-The expanded lab collection can also include:
+The repository contains the following lab files:
 
-- AMSI validation
-- Behavior monitoring validation
-- Endpoint detection and response (EDR) validation
-- LSASS credential theft ASR validation
-- Obfuscated-script ASR validation
-- Office child-process ASR validation
-- Office process-injection ASR validation
-- PsExec and WMI process-creation ASR validation
-- Microsoft Exploit Guard Demo Tool scenarios
-- Prompt-injection protection validation, where supported
+- `AMSITest.ps1`
+- `BehaviorMonitoring.ps1`
+- `BlockProcessCreationfromWMI.ps1`
+- `DownloadASRPackage.ps1`
+- `DownloadEICARFile.ps1`
+- `DownloadPUAFile.ps1`
+- `EDRDetectionTest.ps1`
+- `NetworkProtection.ps1`
+- `OnDemandRun.ps1`
+- `ORADAD.ps1`
+- `Prompt-injection-Attack.txt`
+- `Ransomware.ps1`
+- `Recon.ps1`
+- `RemotePowerShell.ps1`
+- `RemoveDefender.ps1`
+- `SuspiciousPowershell.ps1`
+
+ASR testing is intentionally handled through the Microsoft-provided [Attack Surface Reduction - Microsoft Defender Testground](https://demo.wd.microsoft.com/Page/ASR2) and its downloadable ASR test tool.
 
 ## Important: A Block Is Not Always an Alert
 
@@ -76,41 +84,27 @@ Use the following validation sequence:
 - Internet access for tests that retrieve Microsoft-hosted demonstration content
 - Access to the Microsoft Defender portal for timeline, alert, incident, and Advanced Hunting validation
 
-## Recommended Repository Layout
+## Repository Contents
 
 ```text
 Defender-Alert-Generation/
 ├── README.md
-├── Run-All-Tests.ps1
-├── Scripts/
-│   ├── AMSI.ps1
-│   ├── BehaviorMonitoring.ps1
-│   ├── DownloadEICARFile.ps1
-│   ├── DownloadPUAFile.ps1
-│   ├── EDRTest.ps1
-│   ├── LSASS.ps1
-│   ├── NetworkProtection.ps1
-│   ├── ObfuscatedScript.ps1
-│   ├── OfficeChildProcess.ps1
-│   ├── OfficeProcessInjection.ps1
-│   ├── ORADAD.ps1
-│   ├── Recon.ps1
-│   ├── RemotePowerShell.ps1
-│   └── RemoveDefender.ps1
-├── Test-Files/
-│   ├── ASR_Office_Child_Process_Test_Instructions.docx
-│   └── supporting lab files
-├── Hunting/
-│   ├── ASR-Events.kql
-│   ├── Alerts.kql
-│   └── Device-Timeline.kql
-└── Documentation/
-    ├── Expected-Results.md
-    └── Troubleshooting.md
+├── AMSITest.ps1
+├── BehaviorMonitoring.ps1
+├── BlockProcessCreationfromWMI.ps1
+├── DownloadEICARFile.ps1
+├── DownloadPUAFile.ps1
+├── EDRDetectionTest.ps1
+├── NetworkProtection.ps1
+├── OnDemandRun.ps1
+├── ORADAD.ps1
+├── Prompt-injection-Attack.txt
+├── Ransomware.ps1
+├── Recon.ps1
+├── RemotePowerShell.ps1
+├── RemoveDefender.ps1
+└── SuspiciousPowershell.ps1
 ```
-
-Adjust the names to match the files currently stored in the repository.
-
 ## Quick Start
 
 1. Download or clone the repository to a dedicated lab device.
@@ -118,8 +112,9 @@ Adjust the names to match the files currently stored in the repository.
 3. Change to the lab directory before each test.
 4. Review scripts before running them.
 5. Run one scenario at a time until its expected behavior is understood.
-6. Use the master test script only after validating the individual scenarios.
-7. Review local and portal evidence after every test.
+6. For ASR validation, use `DownloadASRPackage.ps1`, open the downloaded Microsoft ASR test tool, select the desired rule and configuration, and choose **RunScenario**.
+7. Use `OnDemandRun.ps1` only after validating the individual repository scripts.
+8. Review local and portal evidence after every test.
 
 Example working directory:
 
@@ -131,27 +126,26 @@ Set-Location 'C:\Tools\Labs'
 
 The values below are validation guidance, not a guarantee of a specific alert. Update the **Observed Result** column with results from the lab tenant.
 
-| Test | Primary Control | Local Block Expected | Defender Alert Expected | Advanced Hunting Expected | Observed Result |
-|---|---|---:|---:|---:|---|
-| EICAR | Microsoft Defender Antivirus | Yes, when protection is active | Commonly expected | Commonly expected | Not recorded |
-| PUA download | PUA protection | Depends on policy mode | Depends on detection and policy | Depends on telemetry | Not recorded |
-| Network Protection | Network Protection | Depends on policy mode | Depends on scenario | Commonly expected when supported | Not recorded |
-| AMSI | AMSI and antivirus inspection | Depends on payload and policy | Depends on detection | Depends on telemetry | Not recorded |
-| Behavior Monitoring | Behavior monitoring | Depends on behavior | Depends on detection | Depends on telemetry | Not recorded |
-| EDR test | MDE sensor and EDR detections | Not always | Expected for supported Microsoft test | Expected | Not recorded |
-| ORADAD | Identity and reconnaissance detections | Not necessarily | Depends on product coverage and detection | Depends on data source | Not recorded |
-| Reconnaissance | Behavioral detection | Not necessarily | Depends on behavior | Depends on telemetry | Not recorded |
-| Remote PowerShell | EDR and behavioral detection | Not necessarily | Depends on behavior | Depends on telemetry | Not recorded |
-| Defender modification attempt | Tamper Protection and antivirus | Expected when protected | Depends on activity | Depends on telemetry | Not recorded |
-| LSASS ASR | ASR credential-stealing protection | Expected in Block mode | Do not assume | Validate locally and in hunting | Not recorded |
-| Obfuscated-script ASR | ASR script protection | Expected in Block mode | Do not assume | Validate locally and in hunting | Not recorded |
-| Office child process ASR | Office child-process rule | Expected in Block mode | Do not assume | Validate locally and in hunting | Not recorded |
-| Office process injection ASR | Office process-injection rule | Expected in Block mode | Do not assume | Validate locally and in hunting | Not recorded |
-| PsExec/WMI ASR | Process creation from PsExec and WMI | Expected in Block mode | Do not assume | Validate locally and in hunting | Not recorded |
-| Prompt-injection test | AI protection capability | A block may be visible | An alert was not observed in current lab testing | Availability can vary | Block observed; alert not observed |
+| Test | Test Source | Primary Control | Local Block Expected | Defender Alert Expected | Observed Result |
+|---|---|---|---:|---:|---|
+| EICAR | `DownloadEICARFile.ps1` | Microsoft Defender Antivirus | Yes, when protection is active | Commonly expected | Not recorded |
+| PUA download | `DownloadPUAFile.ps1` | PUA protection | Depends on policy mode | Depends on detection and policy | Not recorded |
+| Network Protection | `NetworkProtection.ps1` | Network Protection | Depends on policy mode | Depends on scenario | Not recorded |
+| AMSI | `AMSITest.ps1` | AMSI and antivirus inspection | Depends on test and policy | Depends on detection | Not recorded |
+| Behavior Monitoring | `BehaviorMonitoring.ps1` | Behavior monitoring | Depends on behavior | Depends on detection | Not recorded |
+| EDR test | `EDRDetectionTest.ps1` | MDE sensor and EDR detections | Not always | Expected for the supported test | Not recorded |
+| ORADAD | `ORADAD.ps1` | Identity and reconnaissance detections | Not necessarily | Depends on product coverage | Not recorded |
+| Reconnaissance | `Recon.ps1` | Behavioral detection | Not necessarily | Depends on behavior | Not recorded |
+| Remote PowerShell | `RemotePowerShell.ps1` | EDR and behavioral detection | Not necessarily | Depends on behavior | Not recorded |
+| Defender modification attempt | `RemoveDefender.ps1` | Tamper Protection and antivirus | Expected when protected | Depends on activity | Not recorded |
+| Suspicious PowerShell | `SuspiciousPowershell.ps1` | AMSI, antivirus, and EDR | Depends on behavior | Depends on detection | Not recorded |
+| WMI process creation | `BlockProcessCreationfromWMI.ps1` | ASR process-creation protection | Expected in Block mode | Do not assume | Not recorded |
+| Ransomware simulation | `Ransomware.ps1` | Applicable Defender protections | Depends on configuration | Depends on detection | Not recorded |
+| Other ASR rules | Microsoft ASR test tool | Selected ASR rule | Expected in Block mode | Do not assume | Not recorded |
+| Prompt-injection test | `Prompt-injection-Attack.txt` | AI protection capability | A block may be visible | Alert not observed in current lab testing | Block observed; alert not observed |
 
 > [!NOTE]
-> Replace generalized expectations with confirmed results from each supported platform and configuration. The purpose of this matrix is to prevent a successful prevention event from being incorrectly documented as a guaranteed alert.
+> A successful prevention event must not be documented as a guaranteed alert. Confirm local enforcement, device timeline evidence, Advanced Hunting telemetry, and alerts separately.
 
 ## Test Details
 
@@ -268,7 +262,7 @@ Use a supported Microsoft Defender for Endpoint test to validate sensor connecti
 
 ---
 
-### ORADAD and Reconnaissance Tests
+### ORADAD and Reconnaissance Tests (requires access to an Active Directory Domain Controller)
 
 **Purpose**
 
@@ -320,91 +314,47 @@ Do not weaken production protection settings to make this scenario run.
 
 ---
 
-### LSASS Credential Theft ASR Test
+### Attack Surface Reduction Testing
 
 **Purpose**
 
-Validate the ASR rule that blocks credential stealing from the Windows Local Security Authority Subsystem.
+Validate Microsoft Defender Attack Surface Reduction rules with the Microsoft-provided tool instead of maintaining custom ASR payload scripts in this repository.
 
-**What this test proves**
+**Microsoft test site**
 
-- The ASR rule is applied to the device.
-- The attempted LSASS access is blocked or audited according to policy.
-- Local Defender evidence can be reviewed.
+Use [Attack Surface Reduction - Microsoft Defender Testground](https://demo.wd.microsoft.com/Page/ASR2) to download the ASR test tool and exercise the available ASR scenarios.
 
-**Known gotcha**
+**Repository workflow**
 
-A blocked attempt does not guarantee a Defender XDR alert. Validate the rule action, local event, device timeline, and available hunting telemetry separately.
+1. Run `DownloadASRPackage.ps1` to obtain the Microsoft ASR test package.
+2. Start `ASRtool.exe` on the dedicated lab device.
+3. Select the ASR rule to validate.
+4. Review the mode shown by the tool. A mode enforced through MDM can appear locked in the interface.
+5. Expand **Show Advanced Options** only when scenario selection, delay, cleanup behavior, or multiple scenarios are needed.
+6. Select **RunScenario**.
+7. Capture the tool output, local Defender evidence, device timeline evidence, and hunting results.
+8. Record an alert only if an alert was actually generated.
 
----
+**Available tool behavior observed during lab testing**
 
-### Obfuscated-Script ASR Test
+- The tool provides rule and scenario selection in a graphical interface.
+- Advanced options include Scenario, Delay, Leave Dirty, and All Scenarios.
+- The tested version did not display command-line help when launched with `/?` or `-?`.
+- The tool can write temporary scenario content under `C:\ProgramData\AntiMalwareTest`, execute the scenario, and clean up afterward.
+- A blocked obfuscated JavaScript scenario displayed an `Access is denied` message from Windows Script Host.
 
-**Purpose**
+**What this test approach proves**
 
-Validate the ASR rule that blocks potentially obfuscated scripts.
-
-**What this test proves**
-
-- The ASR rule evaluates the script.
-- The configured action is enforced.
-- Local evidence can be collected even when an alert is not created.
-
-**Known gotcha**
-
-A script may be blocked without the expected ASR event appearing in the Advanced Hunting table being queried. Confirm that another protection layer, such as antivirus or AMSI, did not cause the block.
-
----
-
-### Office Child-Process ASR Test
-
-**Purpose**
-
-Validate the ASR rule that blocks Microsoft Office applications from creating child processes.
-
-**What this test proves**
-
-- The Office child-process ASR rule is applied.
-- An Office application is prevented from starting the test child process when the rule is in Block mode.
+- The selected ASR rule is evaluated by Defender.
+- The configured Audit, Warn, or Block action is applied.
+- Microsoft-provided ASR scenarios can be used without publishing custom payload implementations in this repository.
 
 **Known gotchas**
 
-- Microsoft Office must be installed.
-- Macro controls can prevent the test from reaching the ASR rule.
-- Do not weaken production macro policy solely to run the demonstration.
-- A prevention event does not guarantee a Defender XDR alert.
-
-The repository can include the file `ASR_Office_Child_Process_Test_Instructions.docx` for transparent lab instructions. The document should not be presented as an automatically executing file.
-
----
-
-### Office Process-Injection ASR Test
-
-**Purpose**
-
-Validate the ASR rule that blocks Office applications from injecting code into other processes.
-
-**What this test proves**
-
-- The process-injection rule is applied.
-- The test behavior is blocked or audited according to policy.
-
----
-
-### PsExec and WMI Process-Creation ASR Test
-
-**Purpose**
-
-Validate the ASR rule that blocks process creation originating from PsExec and WMI commands.
-
-**What this test proves**
-
-- The rule evaluates process creation from the selected management mechanism.
-- The configured action is enforced.
-
-**Known gotcha**
-
-Administrative and diagnostic tools can legitimately use PsExec or WMI. Run the test only on an isolated lab device and document any required exclusions separately from the test.
+- An ASR block does not guarantee a Defender XDR alert.
+- Another protection layer can stop an action before the intended ASR rule evaluates it.
+- Advanced Hunting visibility can vary by rule, event type, platform state, and available telemetry.
+- Office-specific scenarios can be affected by Office security settings before they reach the intended ASR rule.
 
 ---
 
@@ -424,33 +374,50 @@ Validate whether the available Microsoft security control identifies or blocks a
 
 The current test demonstrates prevention behavior only unless alert or hunting evidence is independently confirmed.
 
-## Microsoft Exploit Guard Demo Tool
+## Microsoft ASR Test Tool
 
-The Microsoft Exploit Guard Demo Tool, commonly downloaded as `ASRtool.exe`, provides a graphical interface for testing multiple ASR scenarios.
+The supported testing reference for ASR scenarios in this project is [Attack Surface Reduction - Microsoft Defender Testground](https://demo.wd.microsoft.com/Page/ASR2).
 
-Observed behavior from the lab version:
-
-- File description: `Test Tool for demoing Exploit Guard`
-- Internal name: `AntiMalware.Tools.DemoExploitGuard`
-- The interface provides Rule, Mode, Scenario, Delay, Leave Dirty, and All Scenarios options.
-- The tool writes a scenario file under `C:\ProgramData\AntiMalwareTest`.
-- The tool executes the scenario and then cleans up the generated file.
-- For an obfuscated JavaScript test, Windows Script Host displayed `Access is denied` when the ASR rule blocked the generated script.
-- Running `ASRtool.exe /?` or `ASRtool.exe -?` did not display command-line help in the tested version.
-
-### Recommended Use
-
-Use the graphical tool for Microsoft-provided ASR validation rather than recreating its generated test artifacts. Keep custom PowerShell automation focused on launching documented scripts, recording timestamps, and collecting evidence.
+The Microsoft Defender Testground page provides the ASR test tool download and directs the tester to select the desired configuration and run the scenario. The project therefore references the Microsoft tool rather than uploading separate custom scripts for ASR rules already represented in the tool.
 
 ### Evidence to Capture
 
-- Screenshot of the selected ASR rule and mode
-- Screenshot or text from the tool output pane
-- Windows Script Host or process error shown during the block
-- Defender Operational event
-- Device timeline event
+- Selected ASR rule
+- Configured or MDM-enforced mode
+- Selected scenario
+- Output shown in the ASR tool
+- Any Windows Script Host or process error generated by a block
+- Relevant Windows Defender Operational event
+- Relevant device timeline event
 - Advanced Hunting result, when available
 - Alert or incident, only when one is actually generated
+
+### Cleanup
+
+Use the cleanup guidance published on the Microsoft Defender Testground page and return lab policy to its intended state after testing. Do not disable centrally managed organizational policy solely to complete a demonstration.
+
+
+## Repository File Reference
+
+| File | Intended Validation Area |
+|---|---|
+| `AMSITest.ps1` | Antimalware Scan Interface inspection |
+| `BehaviorMonitoring.ps1` | Defender behavior monitoring |
+| `BlockProcessCreationfromWMI.ps1` | Process creation originating from WMI |
+| `DownloadEICARFile.ps1` | Antivirus detection with the EICAR test file |
+| `DownloadPUAFile.ps1` | Potentially unwanted application protection |
+| `EDRDetectionTest.ps1` | Microsoft Defender for Endpoint EDR validation |
+| `NetworkProtection.ps1` | Network Protection validation |
+| `OnDemandRun.ps1` | On-demand orchestration of repository tests |
+| `ORADAD.ps1` | Directory reconnaissance telemetry and detections |
+| `Prompt-injection-Attack.txt` | Prompt-injection protection instructions |
+| `Ransomware.ps1` | Ransomware-related lab validation |
+| `Recon.ps1` | Reconnaissance behavior |
+| `RemotePowerShell.ps1` | Remote PowerShell or lateral-movement behavior |
+| `RemoveDefender.ps1` | Tamper Protection or Defender modification attempt |
+| `SuspiciousPowershell.ps1` | Suspicious PowerShell behavior |
+
+ASR scenarios not represented by `BlockProcessCreationfromWMI.ps1` are tested with the Microsoft ASR test tool from Defender Testground.
 
 ## Advanced Hunting Starter Queries
 
@@ -646,7 +613,7 @@ Copy this section for every test run.
 
 - [Microsoft Defender for Endpoint demonstration scenarios](https://learn.microsoft.com/en-us/defender-endpoint/defender-endpoint-demonstration-attack-surface-reduction-rules)
 - [Attack surface reduction rules reference](https://learn.microsoft.com/en-us/defender-endpoint/attack-surface-reduction-rules-reference)
-- [Microsoft Defender Testground: Attack Surface Reduction](https://demo.wd.microsoft.com/Page/ASR2)
+- [Attack Surface Reduction - Microsoft Defender Testground](https://demo.wd.microsoft.com/Page/ASR2)
 - [Investigate alerts in Microsoft Defender XDR](https://learn.microsoft.com/en-us/defender-xdr/investigate-alerts)
 - [Microsoft Defender portal](https://security.microsoft.com/)
 
