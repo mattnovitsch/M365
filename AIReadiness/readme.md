@@ -12,7 +12,7 @@ AI usage can appear in several different forms across the enterprise:
 
 The goal should not be to block AI. The goal is to establish **visibility, understand risk, and put appropriate guardrails around how AI is used**.
 
-Microsoft's security platform provides multiple layers that help answer different questions:
+## Questions Microsoft Security Can Help Answer
 
 | Security question | Microsoft capability |
 |---|---|
@@ -28,15 +28,24 @@ Microsoft's security platform provides multiple layers that help answer differen
 | Where can unmanaged or unapproved AI agents be reviewed? | Shadow AI in the Microsoft 365 admin center |
 | How can broader Microsoft 365 security defaults be established? | Microsoft 365 Baseline Security Mode |
 
+## AI Security Layers at a Glance
+
+| Layer | Security question | Microsoft capability |
+|---|---|---|
+| Local AI discovery | What agents are installed? | Microsoft Defender for Endpoint |
+| Shadow AI | What unmanaged agents are being used? | Shadow AI in the Microsoft 365 admin center |
+| Cloud AI discovery | What AI sites, applications, and domains are being accessed? | Microsoft Defender for Cloud Apps |
+| Data guardrails | What sensitive information can users share with AI? | Microsoft Purview |
+| Runtime guardrails | Is a supported local agent encountering prompt injection or high-risk activity? | Microsoft Defender for Endpoint AI agent runtime protection |
+| Microsoft 365 hardening | What foundational Microsoft 365 security controls should be reviewed? | Microsoft 365 Baseline Security Mode |
+
 ## Where Do I Start?
 
-Do not start by blocking AI tools before understanding what is being used in your environment. Start with visibility, then move toward governance and enforcement.
+Do not start by blocking AI tools before understanding what is being used. Start with visibility, then move toward governance and enforcement.
 
 ### 1. Discover Local AI Agents
 
 Use Microsoft Defender for Endpoint to identify supported local AI agents running on managed endpoints. Defender can provide visibility into the agent, device, user or account, and configured MCP servers. Local AI agent information can also be investigated through Advanced Hunting.
-
-This is a good starting point for answering:
 
 > What AI agents are running on my endpoints, who is using them, and what are they connected to?
 
@@ -44,13 +53,7 @@ This is a good starting point for answering:
 
 ### 2. Understand Shadow AI
 
-Once AI agents are discovered, determine whether they are known and approved. The Shadow AI experience in the Microsoft 365 admin center is designed to help administrators discover, monitor, and govern unmanaged AI agents.
-
-This moves the conversation from:
-
-> Do we have AI agents?
-
-To:
+After agents are discovered, determine whether they are known and approved. The Shadow AI experience in the Microsoft 365 admin center is designed to help administrators discover, monitor, and govern unmanaged AI agents.
 
 > Which AI agents are being used without IT visibility or approval?
 
@@ -58,11 +61,9 @@ To:
 
 ### 3. Discover Cloud Generative AI Usage
 
-Not every AI tool is installed locally. Users might access generative AI services directly through a browser or cloud application.
+Not every AI tool is installed locally. Users might access generative AI services through browsers or cloud applications. Microsoft Defender for Cloud Apps provides Cloud Discovery visibility into cloud applications accessed across the organization.
 
-Microsoft Defender for Cloud Apps provides Cloud Discovery visibility into cloud applications accessed across the organization. Security teams can review discovered applications in the **Generative AI** category, identify associated domains and users, review available usage and risk information, and determine whether applications align with organizational policy.
-
-This helps answer:
+Security teams can review discovered applications in the **Generative AI** category, identify associated domains and users, review available usage and risk information, and determine whether applications align with organizational policy.
 
 > Which generative AI services and domains are users accessing?
 
@@ -71,19 +72,36 @@ This helps answer:
 - [View discovered apps with the Cloud Discovery dashboard](https://learn.microsoft.com/en-us/defender-cloud-apps/discovered-apps)
 - [Manage generative AI apps for your organization](https://learn.microsoft.com/en-us/microsoft-365/copilot/manage-generative-ai-apps)
 
-### 4. Add Runtime Guardrails
+### 4. Protect Data Going to AI with Microsoft Purview
 
-Discovery tells you that an AI agent exists. Runtime protection addresses a different question:
+Microsoft Purview provides the data-security side of the AI guardrail strategy. Defender helps identify the AI applications and agents being used, while Purview addresses a separate question:
 
-> What happens when the agent processes malicious content or attempts a risky action?
+> What corporate data are users sharing with AI?
+
+Relevant Microsoft Purview capabilities include:
+
+- **Data Security Posture Management (DSPM):** Helps identify and manage data-security risks associated with AI usage.
+- **Information Protection:** Identifies and protects sensitive information used in supported AI interactions.
+- **Data Loss Prevention (DLP):** Applies policies that control sensitive information shared with supported AI applications.
+- **Endpoint DLP:** Can warn or block users when they attempt to share sensitive information with supported third-party generative AI sites.
+- **Audit and compliance capabilities:** Support investigation and governance of covered Copilot, agent, enterprise AI, and other generative AI interactions.
+
+This creates an important guardrail: an AI application might be permitted, but sensitive organizational data still requires protection.
+
+**Microsoft Learn:**
+
+- [Microsoft Purview data security and compliance protections for generative AI apps](https://learn.microsoft.com/en-us/purview/ai-microsoft-purview)
+- [Considerations for deploying Microsoft Purview Data Security Posture Management for AI](https://learn.microsoft.com/en-us/purview/dspm-for-ai-considerations)
+
+### 5. Add Runtime Guardrails
+
+Discovery tells you that an AI agent exists. Runtime protection addresses what happens when an agent processes malicious content or attempts a risky action.
 
 Microsoft Defender for Endpoint AI agent runtime protection can inspect supported agent workflows for prompt injection and high-risk agent activity. Microsoft documents **Audit**, **Block**, and **Disabled** modes and recommends starting with Audit to observe detections and validate accuracy before moving to Block.
 
-This is particularly important for local coding and agentic AI tools because agents can consume instructions from prompts, files, websites, repositories, and tool output.
-
 **Microsoft Learn:** [AI agent runtime protection with Microsoft Defender for Endpoint (Preview)](https://learn.microsoft.com/en-us/defender-endpoint/ai-agent-runtime-protection-overview)
 
-### 5. Establish a Microsoft 365 Security Baseline
+### 6. Establish a Microsoft 365 Security Baseline
 
 AI-specific controls should be part of a broader security strategy. Review Microsoft 365 Baseline Security Mode alongside AI security controls to understand the broader security configuration of the Microsoft 365 environment.
 
@@ -91,45 +109,22 @@ AI-specific controls should be part of a broader security strategy. Review Micro
 
 ## A Simple AI Security Strategy
 
-You do not need to implement every available control on day one. A practical starting point is:
-
 ```text
 Discover -> Understand -> Assess -> Audit -> Control -> Monitor
 ```
 
-### Discover
-
-Identify local AI agents, MCP configurations, cloud AI applications, domains, users, and devices.
-
-### Understand
-
-Determine how employees are using AI and where unmanaged or Shadow AI exists.
-
-### Assess
-
-Determine whether discovered AI tools align with organizational security, compliance, and data-handling requirements.
-
-### Audit
-
-Where available, begin with audit capabilities to understand behavior before enforcing controls.
-
-### Control
-
-Apply appropriate guardrails based on organizational policy and risk. Depending on the capability and scenario, an AI tool might be allowed, monitored, sanctioned, unsanctioned, restricted, or blocked.
-
-### Monitor
-
-Continue looking for new AI agents, applications, services, domains, and usage patterns. AI discovery should be an ongoing security process rather than a one-time assessment.
+- **Discover:** Identify local AI agents, MCP configurations, cloud AI applications, domains, users, and devices.
+- **Understand:** Determine how employees use AI and where unmanaged or Shadow AI exists.
+- **Assess:** Determine whether discovered tools align with security, compliance, and data-handling requirements.
+- **Audit:** Use audit capabilities where available to understand behavior before enforcement.
+- **Control:** Apply appropriate data and runtime guardrails based on policy and risk.
+- **Monitor:** Continue looking for new agents, applications, services, domains, and usage patterns.
 
 ## Key Takeaway
 
 AI security is not one product or one control. Microsoft Defender for Endpoint, Microsoft Defender for Cloud Apps, Shadow AI, Microsoft Purview, and Microsoft 365 security controls provide different parts of the visibility and protection story.
 
-The most important first step is simple:
-
-> Find out what AI is being used in your environment.
-
-Once visibility is established, security teams can make informed decisions about what should be **allowed, monitored, audited, governed, restricted, or blocked**.
+> Find out what AI is being used in your environment, understand the associated data and runtime risks, and then decide what should be allowed, monitored, audited, governed, restricted, or blocked.
 
 ## Microsoft Learn References
 
@@ -138,6 +133,8 @@ Once visibility is established, security teams can make informed decisions about
 - [Understand Shadow AI in Microsoft 365 admin center](https://learn.microsoft.com/en-us/microsoft-365/admin/manage/agent-shadow-ai?view=o365-worldwide)
 - [View discovered apps with the Cloud Discovery dashboard](https://learn.microsoft.com/en-us/defender-cloud-apps/discovered-apps)
 - [Manage generative AI apps for your organization](https://learn.microsoft.com/en-us/microsoft-365/copilot/manage-generative-ai-apps)
+- [Microsoft Purview data security and compliance protections for generative AI apps](https://learn.microsoft.com/en-us/purview/ai-microsoft-purview)
+- [Considerations for deploying Microsoft Purview DSPM for AI](https://learn.microsoft.com/en-us/purview/dspm-for-ai-considerations)
 - [Microsoft 365 admin center: Baseline Security Mode](https://admin.cloud.microsoft/?#/baselinesecuritymode)
 
 > [!IMPORTANT]
