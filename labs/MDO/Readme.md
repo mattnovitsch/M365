@@ -1,4 +1,4 @@
-# MDO SOC Validation Test Plan
+# Validating Your Defender for Office Policies
 
 ## Goal
 
@@ -102,7 +102,53 @@ A test passes only when the SOC can answer:
 
 ---
 
-## Test 4: High-Confidence Phishing Quarantine Restrictions
+## Test 4: Safe Links Email Detection
+
+**Purpose:** Confirm MDO detects and handles an inbound external email containing the Safe Links test content from the MDO lab repository.
+
+### Test file
+
+Download and use [FileAttachmentwithlinks.txt](https://github.com/mattnovitsch/M365/blob/main/labs/MDO/FileAttachmentwithlinks.txt).
+
+### Steps
+
+1. Open the test file and use the **Download raw file** option in GitHub.
+2. From an external mailbox, create a new email to a pilot user inside the customer domain.
+3. Use the subject `MDO-TEST-04-SAFE-LINKS-EMAIL`.
+4. Attach `FileAttachmentwithlinks.txt` to the email.
+5. Send the message from the external mailbox to the pilot user.
+6. In Microsoft Defender, open **Email & collaboration > Explorer**.
+7. Search by the recipient, sender, subject, and test time.
+8. Open the Email entity page.
+9. Record the threat verdict, detection technology, policy, action, latest delivery location, and original delivery location.
+10. Check Quarantine and any generated alert or incident.
+
+### Expected result
+
+- MDO detects the malicious links contained in the attached test file.
+- The message receives the verdict and action configured by the applicable MDO policies.
+- If the configured action is quarantine, Explorer shows **Quarantine** as the latest delivery location.
+- The SOC can locate the message and identify the detection technology and applied policy.
+
+### Pass criteria
+
+- The message is not delivered to the user's Inbox when the applicable policy requires blocking or quarantine.
+- Explorer shows the expected threat verdict and action.
+- The SOC can open the Email entity page and trace why MDO acted on the message.
+
+### Troubleshooting
+
+If the message is delivered:
+
+1. Confirm the recipient is covered by the intended Safe Links policy.
+2. Confirm Safe Links protection is enabled for email.
+3. Check whether a custom policy, preset policy, transport rule, connector, or allow entry changed the result.
+4. Confirm the message entered Microsoft 365 from an external sender rather than being sent internally.
+5. Search Explorer using the exact subject and review the Email entity page before marking the test failed.
+
+---
+
+## Test 5: High-Confidence Phishing Quarantine Restrictions
 
 **Purpose:** Confirm a user cannot bypass the quarantine restrictions intended for high-confidence phishing.
 
@@ -122,7 +168,7 @@ A test passes only when the SOC can answer:
 
 ---
 
-## Test 5: Malware Quarantine Restrictions
+## Test 6: Malware Quarantine Restrictions
 
 **Purpose:** Confirm users cannot bypass the quarantine controls assigned to malware detections.
 
@@ -160,8 +206,55 @@ Run only when there is an approved repeatable method for producing a safe messag
 
 ---
 
+# SOC Malicious Email Test Tracker
+
+| ID | Malicious test | Expected evidence | Status | Notes |
+|---|---|---|---|---|
+| 01 | Prompt injection | High confidence phishing + Prompt injection protection | ⬜ | |
+| 02 | User/display-name impersonation | Anti-phishing policy action | ⬜ | |
+| 03 | EICAR attachment | Malware verdict / quarantine | ⬜ | |
+| 04 | Safe Links email test file | Malicious URL verdict and configured action | ⬜ | |
+| 05 | High-confidence phishing quarantine | User restrictions match policy | ⬜ | |
+| 06 | Malware quarantine | User restrictions match policy | ⬜ | |
+
+Status: ⬜ Not started | 🟡 Follow-up required | ✅ Passed | ❌ Failed | ⚪ Not applicable
+
+---
+
+# Failure Checklist
+
+When a test fails:
+
+1. Confirm the recipient is in the intended policy scope.
+2. Check policy priority and preset-policy membership.
+3. Check mail-flow rules, connectors, enhanced filtering, and bypass settings.
+4. Check the Tenant Allow/Block List.
+5. Check the message headers and Network Message ID.
+6. Open the message in Explorer and record the detection technology.
+7. Confirm the message reached Exchange Online.
+8. Submit false positives or false negatives to Microsoft.
+9. Retest with a new subject and record the result.
+
+---
+
+# Pilot Exit Criteria
+
+The malicious-email validation is complete when:
+
+- Prompt-injection protection has been tested for applicable MDO Plan 2 users.
+- User/display-name impersonation protection has been tested.
+- EICAR test content has been used to validate malware handling without real malware.
+- The Safe Links email test file has been sent through normal inbound mail flow and handled according to the applicable MDO policy.
+- High-confidence phishing and malware quarantine restrictions match the approved configuration.
+- The SOC can identify the verdict, detection technology, policy, action, and final location for applicable MDO detections.
+- Failed tests have documented owners and corrective actions.
+
+---
+
 # Microsoft References
 
+- [MDO lab test files](https://github.com/mattnovitsch/M365/tree/main/labs/MDO)
+- [Safe Links email test file](https://github.com/mattnovitsch/M365/blob/main/labs/MDO/FileAttachmentwithlinks.txt)
 - [Prompt injection protection in Microsoft Defender for Office 365](https://learn.microsoft.com/en-us/defender-office-365/step-by-step-guides/prompt-injection-protection-defender-for-office-365)
 - [Recommended settings for EOP and Microsoft Defender for Office 365](https://learn.microsoft.com/en-us/defender-office-365/recommended-settings-for-eop-and-office365)
 - [Anti-phishing policies in Microsoft 365](https://learn.microsoft.com/en-us/defender-office-365/anti-phishing-policies-about)
