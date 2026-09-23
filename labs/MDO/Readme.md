@@ -190,7 +190,7 @@ If the message is delivered:
 
 # Optional Advanced Malicious Email Tests
 
-These are intentionally outside the core SOC test set because they require infrastructure or conditions many organizations will not have readily available.
+These are intentionally outside the core Security Engineer's test set because they require infrastructure or conditions many organizations will not have readily available.
 
 ## Domain Impersonation
 
