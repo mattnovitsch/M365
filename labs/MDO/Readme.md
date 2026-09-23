@@ -29,7 +29,7 @@ A test passes only when the Security Engineer can answer:
 - What detected the message?
 - What action did MDO take?
 - Where is the message now?
-- Can the SOC investigate and respond?
+- Can the Security Engineer investigate and respond?
 
 ---
 
@@ -76,13 +76,13 @@ A test passes only when the Security Engineer can answer:
 
 - MDO evaluates the message using the configured user-impersonation protection.
 - Expected safety tip, quarantine, or other configured action is applied when the message meets the policy's detection criteria.
-- The SOC can identify the applicable anti-phishing policy and resulting action.
+- The Security Engineer can identify the applicable anti-phishing policy and resulting action.
 
 ---
 
 ## Test 3: EICAR Malware Attachment
 
-**Purpose:** Confirm malicious attachment detection, quarantine, and SOC investigation using the harmless EICAR antivirus test file instead of real malware.
+**Purpose:** Confirm malicious attachment detection, quarantine, and the Security Engineer's investigation using the harmless EICAR antivirus test file instead of real malware.
 
 ### Steps
 
@@ -95,7 +95,7 @@ A test passes only when the Security Engineer can answer:
 ### Expected result
 
 - The malicious test attachment is detected and handled according to the configured policy.
-- The SOC can see the verdict and response in Defender.
+- The Security Engineer can see the verdict and response in Defender.
 - Quarantine permissions prevent unauthorized release when configured to do so.
 
 > Do not use actual malware. Some sending-side security products can intercept EICAR before it reaches Microsoft 365. If that occurs, record it as **not received by MDO**, not as an MDO failure.
@@ -128,13 +128,13 @@ Download and use [FileAttachmentwithlinks.txt](https://github.com/mattnovitsch/M
 - MDO detects the malicious links contained in the attached test file.
 - The message receives the verdict and action configured by the applicable MDO policies.
 - If the configured action is quarantine, Explorer shows **Quarantine** as the latest delivery location.
-- The SOC can locate the message and identify the detection technology and applied policy.
+- The Security Engineer can locate the message and identify the detection technology and applied policy.
 
 ### Pass criteria
 
 - The message is not delivered to the user's Inbox when the applicable policy requires blocking or quarantine.
 - Explorer shows the expected threat verdict and action.
-- The SOC can open the Email entity page and trace why MDO acted on the message.
+- The Security Engineer can open the Email entity page and trace why MDO acted on the message.
 
 ### Troubleshooting
 
