@@ -2,7 +2,7 @@
 
 ## Goal
 
-Use quick, repeatable tests to confirm Microsoft Defender for Office 365 (MDO) is applying the correct policy, taking the expected action, and giving the SOC enough evidence to investigate.
+Use quick, repeatable tests to confirm Microsoft Defender for Office 365 (MDO) is applying the correct policy, taking the expected action, and giving the Security Engineer enough evidence to investigate.
 
 ## Before You Start
 
@@ -12,7 +12,7 @@ Use quick, repeatable tests to confirm Microsoft Defender for Office 365 (MDO) i
 - Do not use real malware, live credential-harvesting pages, or uncontrolled malicious URLs.
 - Save the message subject, sender, recipient, and time for every test.
 
-## Standard SOC Validation
+## Standard Validation
 
 For each test, check:
 
@@ -23,7 +23,7 @@ For each test, check:
 5. **Message trace:** Exchange admin center > Mail flow > Message trace
 6. **Email entity page:** Open the message from Explorer and record the detection technology, policy, verdict, action, and delivery location.
 
-A test passes only when the SOC can answer:
+A test passes only when the Security Engineer can answer:
 
 - Which policy applied?
 - What detected the message?
@@ -33,7 +33,7 @@ A test passes only when the SOC can answer:
 
 ---
 
-# Malicious Email SOC Test Cases
+# Malicious Email Test Cases
 
 > Scope: This plan intentionally tests only malicious or suspicious email detection and response. Clean-mail, clean-attachment, general user-reporting, and business-flow tests are excluded.
 
@@ -56,7 +56,7 @@ A test passes only when the SOC can answer:
 - Verdict: **High confidence phishing**.
 - Detection technology: **Prompt injection protection**.
 - The message follows the configured high-confidence phishing action.
-- The SOC can locate and investigate the detection in Defender.
+- The Security Engineer can locate and investigate the detection in Defender.
 
 ---
 
@@ -184,7 +184,7 @@ If the message is delivered:
 ### Expected result
 
 - Available actions match the malware quarantine policy.
-- The SOC retains the expected administrative investigation and remediation workflow.
+- The Security Engineer retains the expected administrative investigation and remediation workflow.
 
 ---
 
@@ -203,51 +203,6 @@ Run as a separate mail-engineering exercise when the organization has approved i
 ## ZAP / Post-Delivery Verdict Change
 
 Run only when there is an approved repeatable method for producing a safe message whose verdict changes after delivery.
-
----
-
-# SOC Malicious Email Test Tracker
-
-| ID | Malicious test | Expected evidence | Status | Notes |
-|---|---|---|---|---|
-| 01 | Prompt injection | High confidence phishing + Prompt injection protection | ⬜ | |
-| 02 | User/display-name impersonation | Anti-phishing policy action | ⬜ | |
-| 03 | EICAR attachment | Malware verdict / quarantine | ⬜ | |
-| 04 | Safe Links email test file | Malicious URL verdict and configured action | ⬜ | |
-| 05 | High-confidence phishing quarantine | User restrictions match policy | ⬜ | |
-| 06 | Malware quarantine | User restrictions match policy | ⬜ | |
-
-Status: ⬜ Not started | 🟡 Follow-up required | ✅ Passed | ❌ Failed | ⚪ Not applicable
-
----
-
-# Failure Checklist
-
-When a test fails:
-
-1. Confirm the recipient is in the intended policy scope.
-2. Check policy priority and preset-policy membership.
-3. Check mail-flow rules, connectors, enhanced filtering, and bypass settings.
-4. Check the Tenant Allow/Block List.
-5. Check the message headers and Network Message ID.
-6. Open the message in Explorer and record the detection technology.
-7. Confirm the message reached Exchange Online.
-8. Submit false positives or false negatives to Microsoft.
-9. Retest with a new subject and record the result.
-
----
-
-# Pilot Exit Criteria
-
-The malicious-email validation is complete when:
-
-- Prompt-injection protection has been tested for applicable MDO Plan 2 users.
-- User/display-name impersonation protection has been tested.
-- EICAR test content has been used to validate malware handling without real malware.
-- The Safe Links email test file has been sent through normal inbound mail flow and handled according to the applicable MDO policy.
-- High-confidence phishing and malware quarantine restrictions match the approved configuration.
-- The SOC can identify the verdict, detection technology, policy, action, and final location for applicable MDO detections.
-- Failed tests have documented owners and corrective actions.
 
 ---
 
