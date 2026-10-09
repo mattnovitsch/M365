@@ -3,27 +3,50 @@
 <#
 .SYNOPSIS
     Creates/updates a domain GPO from the exported Intune policy "Windows Baseline AV Policy".
+
 .DESCRIPTION
     - Targets the PDC Emulator for every Group Policy operation.
     - Finds the GPO once, then modifies it by GUID.
     - Waits for a new GPO's SYSVOL folder and retries failed writes.
+    - Cloud protection level left Not Configured (Defender default).
     - ASR rules and Controlled Folder Access in Audit. EDR in block mode enabled.
+    - Optional path, process, and extension exclusions imported from CSV files.
     - Verifies key settings and exports a Backup-GPO backup.
+
+.EXAMPLE
+    .\Build-WindowsBaselineAV-GPO.ps1 -Force
+
+.EXAMPLE
+    .\Build-WindowsBaselineAV-GPO.ps1 -Force `
+        -PathCsv      "C:\tools\PathExclusions.csv" `
+        -ProcessCsv   "C:\tools\ProcessExclusions.csv" `
+        -ExtensionCsv "C:\tools\ExtensionExclusions.csv"
 #>
 [CmdletBinding()]
 param(
-    [string]$GpoName    = 'SEC - Windows Baseline AV Policy',
-    [string]$BackupPath = (Join-Path $PSScriptRoot 'GPO-Backup'),
+    [string]$GpoName = 'SEC - Windows Baseline AV Policy',
+    [string]$BackupPath,
+    [string]$PathCsv,
+    [string]$ProcessCsv,
+    [string]$ExtensionCsv,
     [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2026-10-09 v4 (retry + EDR block mode)'
+$ScriptVersion = '2026-10-09 v5 (default cloud level + CSV exclusions)'
 
 Import-Module GroupPolicy     -ErrorAction Stop
 Import-Module ActiveDirectory -ErrorAction Stop
 
 Write-Host "Script version: $ScriptVersion" -ForegroundColor Magenta
+
+#region Backup path (works when $PSScriptRoot is empty)
+if (-not $BackupPath) {
+    $baseFolder = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    $BackupPath = Join-Path $baseFolder 'GPO-Backup'
+}
+Write-Host "Backup:    $BackupPath" -ForegroundColor Cyan
+#endregion
 
 #region Domain and PDC
 $ADDomain = Get-ADDomain -ErrorAction Stop
@@ -104,6 +127,25 @@ function Set-String {
             -Key $Key -ValueName $Name -Type String -Value $Value | Out-Null
     }
 }
+
+function Remove-GpoValue {
+    param([string]$Key, [string]$Name)
+    try {
+        if ($Name) {
+            Remove-GPRegistryValue -Guid $GpoId -Domain $Domain -Server $PDC -Key $Key -ValueName $Name | Out-Null
+        }
+        else {
+            Remove-GPRegistryValue -Guid $GpoId -Domain $Domain -Server $PDC -Key $Key | Out-Null
+        }
+    }
+    catch { }   # value or key not present
+}
+
+function Get-GpoValue {
+    param([string]$Key, [string]$Name)
+    (Get-GPRegistryValue -Guid $GpoId -Domain $Domain -Server $PDC `
+        -Key $Key -ValueName $Name -ErrorAction SilentlyContinue).Value
+}
 #endregion
 
 #region Registry paths (inside the GPO)
@@ -115,6 +157,7 @@ $Mp       = "$WD\MpEngine"
 $Threats  = "$WD\Threats"
 $Threat   = "$WD\Threats\ThreatSeverityDefaultAction"
 $Features = "$WD\Features"
+$ExclRoot = "$WD\Exclusions"
 $Exploit  = "$WD\Windows Defender Exploit Guard"
 $NP       = "$Exploit\Network Protection"
 $ASRRoot  = "$Exploit\ASR"
@@ -125,36 +168,39 @@ $NIS      = "$WD\NIS\Consumers\IPS"
 
 #region Defender AV settings
 Write-Host 'Writing Defender Antivirus settings...' -ForegroundColor Cyan
-Set-Dword $Scan 'DisableArchiveScanning' 0
-Set-Dword $RTP  'DisableBehaviorMonitoring' 0
-Set-Dword $Spy  'SpynetReporting' 2
-Set-Dword $Scan 'DisableEmailScanning' 0
-Set-Dword $Scan 'DisableScanningMappedNetworkDrivesForFullScan' 1
-Set-Dword $Scan 'DisableRemovableDriveScanning' 0
+Set-Dword $Scan 'DisableArchiveScanning' 0                          # Scan archive files
+Set-Dword $RTP  'DisableBehaviorMonitoring' 0                       # Behavior monitoring on
+Set-Dword $Spy  'SpynetReporting' 2                                 # Advanced MAPS
+Set-Dword $Scan 'DisableEmailScanning' 0                            # Email scanning on
+Set-Dword $Scan 'DisableScanningMappedNetworkDrivesForFullScan' 1   # No full scan of mapped drives
+Set-Dword $Scan 'DisableRemovableDriveScanning' 0                   # Scan removable drives
 Set-Dword $WD   'DisableIntrusionPreventionSystem' 0
-Set-Dword $RTP  'DisableIOAVProtection' 0
-Set-Dword $RTP  'DisableRealtimeMonitoring' 0
-Set-Dword $Scan 'DisableScanningNetworkFiles' 0
-Set-Dword $RTP  'DisableScriptScanning' 0
-Set-Dword $WD   'UILockdown' 0
+Set-Dword $RTP  'DisableIOAVProtection' 0                           # Scan downloads and attachments
+Set-Dword $RTP  'DisableRealtimeMonitoring' 0                       # Real-time protection on
+Set-Dword $Scan 'DisableScanningNetworkFiles' 0                     # Scan network files
+Set-Dword $RTP  'DisableScriptScanning' 0                           # Script scanning on
+Set-Dword $WD   'UILockdown' 0                                      # Users can see the AV UI
 Set-Dword $Scan 'CheckForSignaturesBeforeRunningScan' 1
-Set-Dword $Mp   'MpCloudBlockLevel' 0
-Set-Dword $NP   'EnableNetworkProtection' 1
-Set-Dword $WD   'PUAProtection' 1
-Set-Dword $RTP  'RealtimeScanDirection' 0
-Set-Dword $Scan 'ScheduleQuickScanTime' 120
-Set-Dword $Spy  'SubmitSamplesConsent' 3
-Set-Dword $WD   'DisableLocalAdminMerge' 1
+Set-Dword $NP   'EnableNetworkProtection' 1                         # Block
+Set-Dword $WD   'PUAProtection' 1                                   # Block
+Set-Dword $RTP  'RealtimeScanDirection' 0                           # Monitor all files
+Set-Dword $Scan 'ScheduleQuickScanTime' 120                         # 02:00
+Set-Dword $Spy  'SubmitSamplesConsent' 3                            # Send all samples
+Set-Dword $WD   'DisableLocalAdminMerge' 1                          # Ignore local admin exclusions
 Set-Dword $RTP  'DisableOnAccessProtection' 0
+
+# Cloud protection level: Not Configured (Defender default).
+# Removes Zero Tolerance if an earlier run wrote it.
+Remove-GpoValue $Mp 'MpCloudBlockLevel'
 #endregion
 
 #region Threat severity default actions: Quarantine (2)
 Write-Host 'Writing threat severity default actions...' -ForegroundColor Cyan
 Set-Dword  $Threats 'Threats_ThreatSeverityDefaultAction' 1
-Set-String $Threat '1' '2'
-Set-String $Threat '2' '2'
-Set-String $Threat '4' '2'
-Set-String $Threat '5' '2'
+Set-String $Threat '1' '2'   # Low
+Set-String $Threat '2' '2'   # Moderate
+Set-String $Threat '4' '2'   # High
+Set-String $Threat '5' '2'   # Severe
 #endregion
 
 #region EDR in block mode
@@ -202,37 +248,91 @@ $AsrRules = @(
 foreach ($id in $AsrRules) { Set-String $ASR $id '2' }
 #endregion
 
+#region Exclusions from CSV (optional)
+$ExclusionCounts = @{}
+
+function Set-ExclusionList {
+    param(
+        [string]$CsvPath,     # CSV file to import
+        [string]$Column,      # Path, Process, or Extension
+        [string]$SubKey,      # Paths, Processes, or Extensions
+        [string]$EnableName   # Exclusions_Paths, Exclusions_Processes, or Exclusions_Extensions
+    )
+
+    if (-not $CsvPath) { return }
+    if (-not (Test-Path $CsvPath)) { throw "$Column CSV not found: $CsvPath" }
+
+    $rows = @(Import-Csv -Path $CsvPath)
+    if ($rows.Count -eq 0) { throw "$Column CSV is empty: $CsvPath" }
+    if ($rows[0].PSObject.Properties.Name -notcontains $Column) {
+        throw "$CsvPath must have a '$Column' column."
+    }
+
+    $values = @($rows |
+        ForEach-Object { "$($_.$Column)".Trim() } |
+        Where-Object { $_ } |
+        ForEach-Object { if ($Column -eq 'Extension') { $_.TrimStart('*') } else { $_ } } |
+        Sort-Object -Unique)
+
+    Write-Host "Writing $($values.Count) $Column exclusions from $CsvPath..." -ForegroundColor Cyan
+
+    $key = "$ExclRoot\$SubKey"
+
+    # Clear the existing list so the GPO matches the CSV exactly
+    Remove-GpoValue $key
+
+    Set-Dword $ExclRoot $EnableName 1        # turns the policy on
+    foreach ($v in $values) {
+        Set-String $key $v '0'
+        Write-Host "  + $v"
+    }
+
+    $script:ExclusionCounts[$SubKey] = $values.Count
+}
+
+Set-ExclusionList -CsvPath $PathCsv      -Column 'Path'      -SubKey 'Paths'      -EnableName 'Exclusions_Paths'
+Set-ExclusionList -CsvPath $ProcessCsv   -Column 'Process'   -SubKey 'Processes'  -EnableName 'Exclusions_Processes'
+Set-ExclusionList -CsvPath $ExtensionCsv -Column 'Extension' -SubKey 'Extensions' -EnableName 'Exclusions_Extensions'
+#endregion
+
 #region Verify
 Write-Host ''
 Write-Host 'Verifying...' -ForegroundColor Cyan
-function Get-GpoValue {
-    param([string]$Key, [string]$Name)
-    (Get-GPRegistryValue -Guid $GpoId -Domain $Domain -Server $PDC `
-        -Key $Key -ValueName $Name -ErrorAction SilentlyContinue).Value
-}
-$asrValues = @(Get-GPRegistryValue -Guid $GpoId -Domain $Domain -Server $PDC -Key $ASR -ErrorAction SilentlyContinue |
+
+$asrValues  = @(Get-GPRegistryValue -Guid $GpoId -Domain $Domain -Server $PDC -Key $ASR -ErrorAction SilentlyContinue |
     Where-Object { $_.ValueName })
-$asrAudit  = @($asrValues | Where-Object { "$($_.Value)" -eq '2' })
-$cfaValue  = Get-GpoValue $CFA 'EnableControlledFolderAccess'
-$edrValue  = Get-GpoValue $Features 'PassiveRemediation'
-$npValue   = Get-GpoValue $NP 'EnableNetworkProtection'
+$asrAudit   = @($asrValues | Where-Object { "$($_.Value)" -eq '2' })
+$cfaValue   = Get-GpoValue $CFA 'EnableControlledFolderAccess'
+$edrValue   = Get-GpoValue $Features 'PassiveRemediation'
+$npValue    = Get-GpoValue $NP 'EnableNetworkProtection'
+$cloudValue = Get-GpoValue $Mp 'MpCloudBlockLevel'
 
 Write-Host "ASR rules in GPO:        $($asrValues.Count) (expected $($AsrRules.Count))"
 Write-Host "ASR rules set to Audit:  $($asrAudit.Count)"
 Write-Host "CFA value:               $cfaValue (expected 2 = Audit)"
 Write-Host "EDR in block mode:       $edrValue (expected 1)"
 Write-Host "Network Protection:      $npValue (expected 1 = Block)"
-if ($asrAudit.Count -ne $AsrRules.Count -or "$cfaValue" -ne '2' -or "$edrValue" -ne '1') {
-    Write-Warning 'Verification did not match expected values.'
+Write-Host ("Cloud protection level:  {0} (expected Not Configured)" -f $(if ($null -eq $cloudValue) { 'Not Configured' } else { $cloudValue }))
+
+foreach ($sub in $ExclusionCounts.Keys) {
+    $actual = @(Get-GPRegistryValue -Guid $GpoId -Domain $Domain -Server $PDC `
+        -Key "$ExclRoot\$sub" -ErrorAction SilentlyContinue | Where-Object { $_.ValueName })
+    Write-Host ("{0,-24} {1} (expected {2})" -f "$sub exclusions:", $actual.Count, $ExclusionCounts[$sub])
+}
+
+if ($asrAudit.Count -ne $AsrRules.Count -or "$cfaValue" -ne '2' -or "$edrValue" -ne '1' -or $null -ne $cloudValue) {
+    Write-Warning 'Verification did not match expected values. Review the output above.'
 }
 #endregion
 
 #region Backup
 New-Item -ItemType Directory -Path $BackupPath -Force | Out-Null
 $backup = Backup-GPO -Guid $GpoId -Domain $Domain -Server $PDC -Path $BackupPath `
-    -Comment 'Intune Windows Baseline AV conversion; ASR and CFA Audit; EDR block mode enabled'
+    -Comment 'Intune Windows Baseline AV conversion; ASR and CFA Audit; EDR block mode; default cloud level'
+
 Write-Host ''
 Write-Host "GPO updated: $GpoName (ID $GpoId)" -ForegroundColor Green
 Write-Host "Backup ID:   $($backup.Id)"
 Write-Host "Backup path: $BackupPath"
+Write-Host "Import example: Import-GPO -BackupId '$($backup.Id)' -Path '$BackupPath' -TargetName '$GpoName' -CreateIfNeeded"
 #endregion
