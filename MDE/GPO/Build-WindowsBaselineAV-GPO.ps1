@@ -168,6 +168,7 @@ $NIS      = "$WD\NIS\Consumers\IPS"
 
 #region Defender AV settings
 Write-Host 'Writing Defender Antivirus settings...' -ForegroundColor Cyan
+Set-Dword $WD 'DisableAntiSpyware' 0
 Set-Dword $Scan 'DisableArchiveScanning' 0                          # Scan archive files
 Set-Dword $RTP  'DisableBehaviorMonitoring' 0                       # Behavior monitoring on
 Set-Dword $Spy  'SpynetReporting' 2                                 # Advanced MAPS
@@ -303,6 +304,7 @@ $asrValues  = @(Get-GPRegistryValue -Guid $GpoId -Domain $Domain -Server $PDC -K
     Where-Object { $_.ValueName })
 $asrAudit   = @($asrValues | Where-Object { "$($_.Value)" -eq '2' })
 $cfaValue   = Get-GpoValue $CFA 'EnableControlledFolderAccess'
+$disableAVValue = Get-GpoValue $WD 'DisableAntiSpyware'
 $edrValue   = Get-GpoValue $Features 'PassiveRemediation'
 $npValue    = Get-GpoValue $NP 'EnableNetworkProtection'
 $cloudValue = Get-GpoValue $Mp 'MpCloudBlockLevel'
@@ -310,6 +312,7 @@ $cloudValue = Get-GpoValue $Mp 'MpCloudBlockLevel'
 Write-Host "ASR rules in GPO:        $($asrValues.Count) (expected $($AsrRules.Count))"
 Write-Host "ASR rules set to Audit:  $($asrAudit.Count)"
 Write-Host "CFA value:               $cfaValue (expected 2 = Audit)"
+Write-Host "Turn off Defender AV:    $disableAVValue (expected 0 = Disabled)"
 Write-Host "EDR in block mode:       $edrValue (expected 1)"
 Write-Host "Network Protection:      $npValue (expected 1 = Block)"
 Write-Host ("Cloud protection level:  {0} (expected Not Configured)" -f $(if ($null -eq $cloudValue) { 'Not Configured' } else { $cloudValue }))
@@ -320,7 +323,13 @@ foreach ($sub in $ExclusionCounts.Keys) {
     Write-Host ("{0,-24} {1} (expected {2})" -f "$sub exclusions:", $actual.Count, $ExclusionCounts[$sub])
 }
 
-if ($asrAudit.Count -ne $AsrRules.Count -or "$cfaValue" -ne '2' -or "$edrValue" -ne '1' -or $null -ne $cloudValue) {
+if (
+    $asrAudit.Count -ne $AsrRules.Count -or
+    "$cfaValue" -ne '2' -or
+    "$edrValue" -ne '1' -or
+    "$disableAVValue" -ne '0' -or
+    $null -ne $cloudValue
+) {
     Write-Warning 'Verification did not match expected values. Review the output above.'
 }
 #endregion
