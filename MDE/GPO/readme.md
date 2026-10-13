@@ -4,6 +4,7 @@ Creates or updates an Active Directory Group Policy Object (GPO) that applies a 
 
 The script also:
 
+- Sets **Turn off Microsoft Defender Antivirus** to **Disabled**, so the GPO explicitly keeps Defender Antivirus on
 - Sets all Attack Surface Reduction (ASR) rules to **Audit**
 - Sets Controlled Folder Access (CFA) to **Audit**
 - Turns on **EDR in block mode**
@@ -105,6 +106,12 @@ Administrative Templates settings are stored as registry values **inside the GPO
 
 All settings are under **Computer Configuration > Policies > Administrative Templates > Windows Components > Microsoft Defender Antivirus**.
 
+### Microsoft Defender Antivirus
+
+| Setting | Value |
+|---|---|
+| Turn off Microsoft Defender Antivirus | **Disabled** (`DisableAntiSpyware = 0`). Defender Antivirus stays **on** |
+
 ### Real-time protection
 
 | Setting | Value |
@@ -154,6 +161,12 @@ All settings are under **Computer Configuration > Policies > Administrative Temp
 | Threat severity default actions | Enabled. Low, Moderate, High, and Severe all set to **Quarantine** (`2`) |
 | Local administrator merge | **Disabled** (`DisableLocalAdminMerge = 1`). Exclusions added by local admins are ignored; only GPO exclusions apply |
 | UI lockdown | Off (users can see the Defender UI) |
+
+### A note on Turn off Microsoft Defender Antivirus
+
+Setting this policy to **Disabled** makes the GPO explicitly state that Defender Antivirus must not be turned off, instead of leaving it Not Configured. If another GPO with higher precedence sets it to **Enabled**, that GPO wins, so check `gpresult` on pilot devices.
+
+`DisableAntiSpyware` is a legacy setting, and newer Defender platform versions may ignore it. Don't treat the GPO value alone as proof that Defender is running. Confirm the service and antivirus state on the device (see [Validating on a client](#validating-on-a-client)).
 
 ### A note on EDR in block mode
 
@@ -258,6 +271,7 @@ ASR rules set to Audit:  19
 CFA value:               2 (expected 2 = Audit)
 EDR in block mode:       1 (expected 1)
 Network Protection:      1 (expected 1 = Block)
+Turn off Defender AV:    0 (expected 0 = Disabled)
 Cloud protection level:  Not Configured (expected Not Configured)
 Paths exclusions:        4 (expected 4)
 Processes exclusions:    2 (expected 2)
@@ -296,9 +310,22 @@ gpupdate /force
 gpresult /h C:\temp\GPResults.html /f
 ```
 
-In the report, confirm **SEC - Windows Baseline AV Policy** is listed under **Applied GPOs** and is the winning GPO for the Defender settings.
+In the report, confirm **SEC - Windows Baseline AV Policy** is listed under **Applied GPOs** and is the winning GPO for the Defender settings, including **Turn off Microsoft Defender Antivirus = Disabled**.
 
-**2. Check the settings Defender is actually using**
+**2. Confirm Defender Antivirus is running**
+
+```powershell
+Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender' -Name DisableAntiSpyware
+
+Get-Service WinDefend | Select-Object Name, Status, StartType
+
+Get-MpComputerStatus | Select-Object `
+    AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, AMRunningMode
+```
+
+Expected: `DisableAntiSpyware = 0`, `WinDefend` is `Running`, `AMServiceEnabled`, `AntivirusEnabled`, and `RealTimeProtectionEnabled` are `True`, and `AMRunningMode = Normal`.
+
+**3. Check the settings Defender is actually using**
 
 ```powershell
 Get-MpPreference | Select-Object `
@@ -308,7 +335,7 @@ Get-MpPreference | Select-Object `
 
 Expected: `EnableControlledFolderAccess = 2`, `CloudBlockLevel = 0`, `EnableNetworkProtection = 1`, `PUAProtection = 1`.
 
-**3. Check ASR rule actions**
+**4. Check ASR rule actions**
 
 ```powershell
 $p = Get-MpPreference
@@ -335,6 +362,8 @@ Every rule should show `Action = 2` (Audit).
 | `GPO ... already exists. Use -Force` | GPO name already in use | Rerun with `-Force` to update it |
 | `CSV must have a '<Column>' column` | Wrong or missing CSV header | Use the headers `Path`, `Process`, and `Extension` |
 | Settings appear under **Extra Registry Settings** in GPMC | Local ADMX templates don't include those settings | Install current Defender ADMX templates in the Central Store. The settings still apply |
+| `gpresult` shows **Turn off Microsoft Defender Antivirus = Enabled** from another GPO | A higher-precedence GPO is turning Defender off | Find the winning GPO in `gpresult` and set the policy to Disabled or Not Configured there |
+| `DisableAntiSpyware = 0` but `WinDefend` isn't running | Something other than this policy is stopping Defender (for example, another antivirus is registered, a service-level GPO, or missing platform components) | Check `Get-MpComputerStatus`, Windows Security Center, and the device's other GPOs and installed security products |
 | Multiple GPOs with the same name | Earlier failed runs each created a GPO | List them with `Get-GPO -All | Where-Object DisplayName -eq '<name>'` and remove extras with `Remove-GPO -Guid <Id>` |
 
 ---
@@ -342,7 +371,7 @@ Every rule should show `Action = 2` (Audit).
 ## Deployment guidance
 
 1. **Pilot first.** Link the GPO to a pilot OU, not the domain root.
-2. **Avoid policy conflicts.** Remove the Intune Antivirus and ASR policy assignments from devices that get this GPO. When both configure the same ASR rule, Group Policy takes precedence by default.
+2. **Avoid policy conflicts.** Remove the Intune Antivirus and ASR policy assignments from devices that get this GPO. When both configure the same ASR rule, Group Policy takes precedence by default. Also check for older GPOs that set **Turn off Microsoft Defender Antivirus** to Enabled.
 3. **Review audit data.** Use the ASR rules report or advanced hunting in the Microsoft Defender portal to see which rules and CFA events trigger.
 4. **Add exclusions only when needed.** Scope them as narrowly as possible.
 5. **Move rules to Block gradually.** Start with the rules that trigger least, then expand to more devices.
