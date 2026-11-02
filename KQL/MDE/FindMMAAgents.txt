@@ -1,0 +1,80 @@
+//Compliant Server devices not using MMA
+DeviceTvmSecureConfigurationAssessment
+| where ConfigurationId =~ "scid-2030"
+| join kind=inner (
+DeviceInfo
+| summarize arg_max(Timestamp, *) by DeviceId
+| where OSPlatform in~ (
+"WindowsServer2016",
+"WindowsServer2012R2",
+"WindowsServer2012",
+"WindowsServer2008R2",
+"WindowsServer2008"
+)
+| where OnboardingStatus == "Onboarded"
+| project DeviceId, ServerOS=OSPlatform, OSVersion
+) on DeviceId
+| join kind=leftouter (
+DeviceTvmSecureConfigurationAssessmentKB
+| where ConfigurationId =~ "scid-2030"
+| project
+ConfigurationId,
+ConfigurationName,
+ConfigurationDescription,
+RiskDescription,
+ConfigurationImpact
+) on ConfigurationId
+| project
+DeviceName,
+ServerOS,
+OSVersion,
+ConfigurationId,
+ConfigurationName,
+ConfigurationDescription,
+IsApplicable,
+IsCompliant,
+Context
+| order by DeviceName asc
+ 
+ 
+//Servers using MMA and need to be upgraded
+let WindowsServers=DeviceInfo
+| summarize arg_max(Timestamp, *) by DeviceId
+| where OSPlatform in~ (
+    "WindowsServer2016",
+    "WindowsServer2012R2",
+    "WindowsServer2012",
+    "WindowsServer2008R2",
+    "WindowsServer2008")
+| where OnboardingStatus == "Onboarded"
+;
+let UnifiedServers=DeviceTvmSecureConfigurationAssessment
+| where ConfigurationId =~ "scid-2030"
+| join kind=inner (
+DeviceInfo
+| summarize arg_max(Timestamp, *) by DeviceId
+| where OSPlatform in~ (
+"WindowsServer2016",
+"WindowsServer2012R2",
+"WindowsServer2012",
+"WindowsServer2008R2",
+"WindowsServer2008"
+)
+| where OnboardingStatus == "Onboarded"
+| project DeviceId, ServerOS=OSPlatform, OSVersion
+) on DeviceId
+| join kind=leftouter (
+DeviceTvmSecureConfigurationAssessmentKB
+| where ConfigurationId =~ "scid-2030"
+| project
+ConfigurationId,
+ConfigurationName,
+ConfigurationDescription,
+RiskDescription,
+ConfigurationImpact
+) on ConfigurationId
+| project
+DeviceName
+| order by DeviceName asc;
+WindowsServers
+| where DeviceName !in(UnifiedServers)
