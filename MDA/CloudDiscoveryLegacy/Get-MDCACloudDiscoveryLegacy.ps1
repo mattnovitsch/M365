@@ -16,8 +16,8 @@ param(
     [string]$MDCAToken = '',
     [ValidateRange(1,365)]
     [int]$TimeFrameDays = 90,
-    [ValidateRange(1,100)]
-    [int]$PageSize = 100,
+    [ValidateRange(1,10000)]
+    [int]$PageSize = 10000,
     [string]$OutputFolder = (Join-Path $PWD ("MDA-CloudDiscovery-{0}" -f (Get-Date -Format 'yyyyMMdd-HHmmss')))
 )
 
