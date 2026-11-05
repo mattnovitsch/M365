@@ -206,4 +206,100 @@ foreach ($stream in $streams) {
     $streamName = [string]$stream.displayName
 
     if ([string]::IsNullOrWhiteSpace($streamId)) {
-        Write-Warning "Skipping '$streamName' because the
+        Write-Warning "Skipping '$streamName' because the API response did not include id, _id, or streamId."
+        continue
+    }
+
+    Write-Host "Retrieving apps from '$streamName' [$streamId]..." -ForegroundColor Cyan
+    $skip = 0
+    $page = 0
+    $previousPageJson = $null
+
+    do {
+        $page++
+        $requestBody = @{
+            streamId  = $streamId
+            timeFrame = $TimeFrameDays
+            skip      = $skip
+            limit     = $PageSize
+        }
+
+        $appsUri  = "$baseUrl/api/v1/discovery/discovered_apps/"
+        $response = Invoke-MDCARequest -Method POST -Uri $appsUri -Body $requestBody
+        $response | ConvertTo-Json -Depth 30 | Set-Content (Join-Path $OutputFolder ("Apps-{0}-Page-{1}.json" -f $streamId,$page)) -Encoding UTF8
+
+        $items = @(Get-ItemsFromResponse -Response $response)
+        $pageJson = $items | ConvertTo-Json -Depth 10 -Compress
+        if ($page -gt 1 -and $pageJson -eq $previousPageJson) {
+            Write-Warning 'The API repeated the prior page. Pagination was stopped.'
+            break
+        }
+        $previousPageJson = $pageJson
+
+        $matched = 0
+        foreach ($app in $items) {
+            $totalScanned++
+            $rawCategory = Get-AppCategory -App $app
+            if ($categoryCounts.ContainsKey($rawCategory)) { $categoryCounts[$rawCategory]++ }
+            else { $categoryCounts[$rawCategory] = 1 }
+
+            if ($CategoryFilter -contains $rawCategory) {
+                $allApps.Add((ConvertTo-FlatAppRecord -App $app -StreamId $streamId -StreamName $streamName))
+                $matched++
+            }
+        }
+
+        Write-Host "  Page ${page}: $($items.Count) apps scanned, $matched matched filter" -ForegroundColor DarkGray
+
+        # Advance by the unfiltered count so pagination stays correct
+        $skip += $items.Count
+
+        $hasNext = $false
+        if ($response.PSObject.Properties.Name -contains 'hasNext') {
+            $hasNext = [bool]$response.hasNext
+        }
+        elseif ($items.Count -eq $PageSize) {
+            $hasNext = $true
+        }
+
+        if ($items.Count -eq 0) { $hasNext = $false }
+        if ($page -ge 10000) { throw 'Pagination exceeded 10,000 pages and was stopped.' }
+    } while ($hasNext)
+}
+
+# Category summary (useful for validating the filter value)
+$categoryCounts.GetEnumerator() |
+    Sort-Object Value -Descending |
+    ForEach-Object { [pscustomobject]@{ Category = $_.Key; AppCount = $_.Value } } |
+    Export-Csv (Join-Path $OutputFolder 'CategoryCounts.csv') -NoTypeInformation -Encoding UTF8
+
+$csvPath  = Join-Path $OutputFolder 'CloudDiscoveryApps-GenerativeAI.csv'
+$jsonPath = Join-Path $OutputFolder 'CloudDiscoveryApps-GenerativeAI.json'
+
+if ($allApps.Count -gt 0) {
+    # Fixed column order for the CSV; the full data stays in the JSON
+    $csvColumns = @(
+        'streamId','StreamName','category','domainList','firstUsed','hqLocation',
+        'lastModified','lastUsed','name','revised_score_total',
+        'validTimeFrames','allDomains','name_l','tags','trafficTotalBytes',
+        'trafficUploadedBytes','trafficTotalEvents','usersCount','ipAddressesCount',
+        'machineNamesCount','trafficTotalBlockedEvents','description','organization'
+    )
+
+    $allApps | Select-Object -Property $csvColumns |
+        Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
+    $allApps | ConvertTo-Json -Depth 30 | Set-Content $jsonPath -Encoding UTF8
+}
+else {
+    "No discovered applications matched category filter: $($CategoryFilter -join ', '). Review CategoryCounts.csv." |
+        Set-Content (Join-Path $OutputFolder 'NoAppsReturned.txt') -Encoding UTF8
+}
+
+Write-Host ''
+Write-Host 'Export complete.' -ForegroundColor Green
+Write-Host "Continuous reports: $($streams.Count)"
+Write-Host "Apps scanned:       $totalScanned"
+Write-Host "Generative AI apps: $($allApps.Count)"
+Write-Host "Output folder:      $((Resolve-Path $OutputFolder).Path)"
+
+$script:Headers = $null
