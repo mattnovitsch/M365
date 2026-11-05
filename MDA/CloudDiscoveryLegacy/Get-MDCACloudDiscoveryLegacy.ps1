@@ -151,7 +151,7 @@ if ([string]::IsNullOrWhiteSpace($MDCARegion)) {
 if ($MDCATenant -notmatch '^[A-Za-z0-9-]+$') { throw 'MDCATenant contains invalid characters.' }
 if ($MDCARegion -notmatch '^[A-Za-z0-9-]+$') { throw 'MDCARegion contains invalid characters.' }
 
-$baseUrl = "https://${MDCATenant}.${MDCARegion}.portal.cloudappsecurity.com"
+$baseUrl = "https://${MDCATenant}.${MDCARegion}.portal.cloudappsecuritygov.com"
 $script:Headers = @{
     Authorization = "Token $($MDCAToken.Trim())"
     Accept        = 'application/json'
